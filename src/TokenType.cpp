@@ -4,15 +4,13 @@
 #include <string_view>
 #include <unordered_map>
 
-std::string toString(TokenType type) {
-    // 用 switch (type) 为每种 TokenType 返回对应的类别码字符串
-    // 参考 requirement_1 表格，如 TokenType::IDENFR -> "IDENFR", INTCON -> "INTCON" 等。
+std::string ToString(TokenType type) {
     switch (type) {
-        // 标识符 Identifier
+        // Identifier
         case TokenType::IDENFR:
             return "IDENFR";
 
-        // 常量 Constant
+        // Constant
         case TokenType::INTCON:
             return "INTCON";
         case TokenType::STRCON:
@@ -20,7 +18,7 @@ std::string toString(TokenType type) {
         case TokenType::CHRCON:
             return "CHRCON";
 
-        // 保留字 Reserved Word
+        // Reserved Word
         case TokenType::MAINTK:
             return "MAINTK";
         case TokenType::CONSTTK:
@@ -50,7 +48,7 @@ std::string toString(TokenType type) {
         case TokenType::RETURNTK:
             return "RETURNTK";
 
-        // 运算符与界符 Operator and Punctuator
+        // Operator and Punctuator
         case TokenType::NOT:
             return "NOT";
         case TokenType::AND:
@@ -102,8 +100,8 @@ std::string toString(TokenType type) {
     }
 }
 
-std::optional<TokenType> getOperatorType(std::string_view op) {
-    static const std::unordered_map<std::string, TokenType> operatorMap = {
+std::optional<TokenType> GetOperatorType(std::string_view op) {
+    static const std::unordered_map<std::string, TokenType> operator_map = {
         {"!",  TokenType::NOT    },
         {"&&", TokenType::AND    },
         {"||", TokenType::OR     },
@@ -128,15 +126,15 @@ std::optional<TokenType> getOperatorType(std::string_view op) {
         {"{",  TokenType::LBRACE },
         {"}",  TokenType::RBRACE },
     };
-    auto it = operatorMap.find(std::string(op));
-    if (it != operatorMap.end()) {
+    auto it = operator_map.find(std::string(op));
+    if (it != operator_map.end()) {
         return it->second;
     }
     return std::nullopt;
 }
 
-std::optional<TokenType> getReservedWordType(std::string_view word) {
-    static const std::unordered_map<std::string, TokenType> reservedWordMap = {
+std::optional<TokenType> GetReservedWordType(std::string_view word) {
+    static const std::unordered_map<std::string, TokenType> reserved_word_map = {
         {"main",     TokenType::MAINTK    },
         {"const",    TokenType::CONSTTK   },
         {"int",      TokenType::INTTK     },
@@ -152,8 +150,8 @@ std::optional<TokenType> getReservedWordType(std::string_view word) {
         {"printf",   TokenType::PRINTFTK  },
         {"return",   TokenType::RETURNTK  },
     };
-    auto it = reservedWordMap.find(std::string(word));
-    if (it != reservedWordMap.end()) {
+    auto it = reserved_word_map.find(std::string(word));
+    if (it != reserved_word_map.end()) {
         return it->second;
     }
     return std::nullopt;

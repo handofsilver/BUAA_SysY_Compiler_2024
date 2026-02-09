@@ -1,0 +1,50 @@
+---
+# 开启的检查器：
+# 1. -* : 先忽略所有默认检查 (清空)
+# 2. readability-identifier-naming : 开启命名检查（这是我们要的）
+# 3. bugprone-* : 开启潜在 Bug 检查 (空指针引用等)
+# 4. google-readability-* : 开启 Google 可读性检查
+# 5. 屏蔽列表 (加负号 -)：
+#    针对你截图中出现的噪音进行定点屏蔽
+Checks: >
+  -*,
+  readability-identifier-naming,
+  bugprone-*,
+  google-readability-*,
+  -readability-magic-numbers,
+  -readability-implicit-bool-conversion,
+  -readability-identifier-length,
+  -readability-function-cognitive-complexity,
+  -readability-braces-around-statements,
+  -readability-uppercase-literal-suffix,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions
+
+CheckOptions:
+  # --- 命名规范 (Google Style) ---
+  
+  # 1. 类名/结构体：大驼峰 (MyClass)
+  - { key: readability-identifier-naming.ClassCase,           value: CamelCase }
+  - { key: readability-identifier-naming.StructCase,          value: CamelCase }
+
+  # 2. 函数名：大驼峰 (DoSomething)
+  - { key: readability-identifier-naming.FunctionCase,        value: CamelCase }
+
+  # 3. 变量名：小写下划线 (my_local_variable)
+  - { key: readability-identifier-naming.VariableCase,        value: lower_case }
+
+  # 4. 【关键】类成员变量：小写下划线 + 下划线后缀 (my_member_)
+  - { key: readability-identifier-naming.MemberCase,          value: lower_case }
+  - { key: readability-identifier-naming.MemberSuffix,        value: '_'        }
+  # 忽略 public 成员 (struct 里的字段通常不需要下划线后缀)
+  - { key: readability-identifier-naming.PublicMemberSuffix,  value: ''         }
+
+  # 5. 常量/全局常量：k + 大驼峰 (kMaxBuffer)
+  - { key: readability-identifier-naming.GlobalConstantCase,  value: CamelCase }
+  - { key: readability-identifier-naming.GlobalConstantPrefix, value: k         }
+
+  # 6. 宏定义：全大写下划线 (MY_MACRO)
+  - { key: readability-identifier-naming.MacroDefinitionCase, value: UPPER_CASE }
+  
+  # 7. 忽略某些特殊场景
+  - { key: readability-identifier-naming.ParameterCase,       value: lower_case }

@@ -5,207 +5,171 @@
 #include <sstream>
 #include <string_view>
 
-Lexer::Lexer(std::string source) : source_(std::move(source)), curPos_(0), lineNum_(0), curToken_(std::nullopt) {}
+Lexer::Lexer(std::string&& source) : source_(std::move(source)), cur_pos_(0), line_num_(0), cur_token_(std::nullopt) {}
 
-Lexer::Lexer(const std::string& filePath) : curPos_(0), lineNum_(0), curToken_(std::nullopt) {
-    std::ifstream f(filePath);
+Lexer::Lexer(const char* file_path) : cur_pos_(0), line_num_(0), cur_token_(std::nullopt) {
+    std::ifstream f(file_path);
     std::ostringstream oss;
     oss << f.rdbuf();
     source_ = oss.str();
 }
 
-void Lexer::next() {
-    curToken_ = std::nullopt;
-    //   while (curPos < source.length()) 根据当前字符分支：
-    //   '"' -> getStringConst(); break;
-    //   '\'' -> getCharConst(); break;
-    //   letter or '_' -> getWord(); break;
-    //   number(digits) -> getIntConst(); break;
-    //   whitespace -> if '\n' then lineNum++; curPos++; continue loop
-    //   '/' and the next one is '/' or '*' -> skipComment(); continue loop
-    //   otherwise -> getOperator(); break;
+void Lexer::Next() {
+    cur_token_ = std::nullopt;
 
-    while (curPos_ < source_.length()) {
-        char currentChar = source_[curPos_];
+    while (cur_pos_ < source_.size()) {
+        char cur_ch = source_[cur_pos_];
 
-        // string const
-        if (currentChar == '\"') {
-            getStringConst();
+        if (cur_ch == '\"') {
+            GetStringConst();
             break;
         }
-        // char const
-        else if (currentChar == '\'') {
-            getCharConst();
+        if (cur_ch == '\'') {
+            GetCharConst();
             break;
         }
-        // int const
-        else if (std::isdigit(currentChar)) {
-            getIntConst();
+        if (std::isdigit(static_cast<unsigned char>(cur_ch))) {
+            GetIntConst();
             break;
         }
-        // word(identifiers or reserved words)
-        else if (std::isalpha(currentChar) || currentChar == '_') {
-            getWord();
+        if (std::isalpha(static_cast<unsigned char>(cur_ch)) || cur_ch == '_') {
+            GetWord();
             break;
         }
-        // others(whitespaces, comments, operators)
-        else {
-            if (std::isspace(currentChar)) {
-                if (currentChar == '\n') {
-                    lineNum_++;
-                }
-                curPos_++;
-            } else if (currentChar == '/' && curPos_ + 1 < static_cast<int>(source_.size())) {
-                char nextChar = source_[curPos_ + 1];
-                if (nextChar == '/' || nextChar == '*') {
-                    skipComment();
-                } else {
-                    // DIV ('/') operator
-                    getOperator();
-                    break;
-                }
+
+        if (std::isspace(cur_ch)) {
+            if (cur_ch == '\n') {
+                line_num_++;
+            }
+            cur_pos_++;
+        } else if (cur_ch == '/' && cur_pos_ + 1 < source_.size()) {
+            char next_ch = source_[cur_pos_ + 1];
+            if (next_ch == '/' || next_ch == '*') {
+                SkipComment();
             } else {
-                getOperator();
+                GetOperator();
                 break;
             }
+        } else {
+            GetOperator();
+            break;
         }
     }
 }
 
-void Lexer::skipComment() {
-    // curPos++ to skip the first '/'
-    // if the next character is '/'：single line comment, loop until '\n', then lineNum++, curPos++
-    // if the next character is '*'：multi line comment, loop until "*/", meet '\n' then lineNum++
+void Lexer::SkipComment() {
+    cur_pos_++;
 
-    curPos_++;
-
-    if (curPos_ < source_.size() && source_[curPos_] == '/') {
-        // single line comment
-        while (curPos_ < source_.size() && source_[curPos_] != '\n') {
-            curPos_++;
+    if (cur_pos_ < source_.size() && source_[cur_pos_] == '/') {
+        while (cur_pos_ < source_.size() && source_[cur_pos_] != '\n') {
+            cur_pos_++;
         }
-        if (curPos_ < source_.size() && source_[curPos_] == '\n') {
-            lineNum_++;
-            curPos_++;
+        if (cur_pos_ < source_.size() && source_[cur_pos_] == '\n') {
+            line_num_++;
+            cur_pos_++;
         }
-        // end of single line comment
-    } else if (curPos_ < source_.size() && source_[curPos_] == '*') {
-        // multi line comment
-        curPos_++;
-        while (curPos_ < source_.size()) {
-            while (curPos_ < source_.size() && source_[curPos_] != '*') { // stage 0
-                if (source_[curPos_] == '\n') {
-                    lineNum_++;
+    } else if (cur_pos_ < source_.size() && source_[cur_pos_] == '*') {
+        cur_pos_++;
+        while (cur_pos_ < source_.size()) {
+            while (cur_pos_ < source_.size() && source_[cur_pos_] != '*') {
+                if (source_[cur_pos_] == '\n') {
+                    line_num_++;
                 }
-                curPos_++;
+                cur_pos_++;
             }
-            while (curPos_ < source_.size() && source_[curPos_] == '*') {
-                curPos_++;
+            while (cur_pos_ < source_.size() && source_[cur_pos_] == '*') {
+                cur_pos_++;
             }
-            if (curPos_ < source_.size() && source_[curPos_] == '/') {
-                curPos_++;
+            if (cur_pos_ < source_.size() && source_[cur_pos_] == '/') {
+                cur_pos_++;
                 break;
             }
         }
-        // end of multi line comment
     }
 }
 
-void Lexer::getStringConst() {
-    // from the current '"' to the unescaped '"'
-    // handle \\ escape
-    // finally curToken_ = Token(STRCON, lineNum_+1, collected string)
-
-    std::string stringConst;
-    stringConst.reserve(64);
-
+void Lexer::GetStringConst() {
+    std::string str_const;
+    str_const.reserve(64);
     do {
-        stringConst += source_[curPos_++];
-        if (source_[curPos_] == '\\') {
-            stringConst += source_[curPos_++];
-            stringConst += source_[curPos_++];
+        str_const += source_[cur_pos_++];
+        if (cur_pos_ < source_.size() && source_[cur_pos_] == '\\') {
+            str_const += source_[cur_pos_++];
+            if (cur_pos_ < source_.size()) {
+                str_const += source_[cur_pos_++];
+            }
         }
-    } while (curPos_ < static_cast<int>(source_.size()) && source_[curPos_] != '\"');
-
-    curToken_ = Token(TokenType::STRCON, lineNum_ + 1, std::move(stringConst));
-}
-
-void Lexer::getCharConst() {
-    // from the current '\'' to the unescaped '\''
-    // handle \\ escape
-    // finally curToken_ = Token(CHRCON, lineNum_+1, collected string)
-
-    std::string charConst;
-    charConst.reserve(64);
-
-    do {
-        charConst += source_[curPos_++];
-        if (curPos_ < static_cast<int>(source_.size()) && source_[curPos_] == '\\') {
-            charConst += source_[curPos_++];
-            charConst += source_[curPos_++];
-        }
-    } while (curPos_ < static_cast<int>(source_.size()) && source_[curPos_] != '\'');
-
-    if (curPos_ < static_cast<int>(source_.size()) && source_[curPos_] == '\'') {
-        charConst += source_[curPos_++];
+    } while (cur_pos_ < source_.size() && source_[cur_pos_] != '\"');
+    if (cur_pos_ < source_.size() && source_[cur_pos_] == '\"') {
+        str_const += source_[cur_pos_++];
     }
-
-    curToken_ = Token(TokenType::CHRCON, lineNum_ + 1, std::move(charConst));
+    cur_token_ = Token(TokenType::STRCON, static_cast<int>(line_num_ + 1), std::move(str_const));
 }
 
-void Lexer::getWord() {
-    // TODO：对应 Java getWord()：循环收集字母/数字/'_'；然后判断是否为保留字
-    // （可维护 map<string, TokenType> 或 if-else），是则 curToken_ = Token(保留字类型, lineNum_+1, 串)，
-    // 否则 curToken_ = Token(IDENFR, lineNum_+1, 串)。
+void Lexer::GetCharConst() {
+    std::string char_const;
+    char_const.reserve(64);
+    do {
+        char_const += source_[cur_pos_++];
+        if (cur_pos_ < source_.size() && source_[cur_pos_] == '\\') {
+            char_const += source_[cur_pos_++];
+            if (cur_pos_ < source_.size()) {
+                char_const += source_[cur_pos_++];
+            }
+        }
+    } while (cur_pos_ < source_.size() && source_[cur_pos_] != '\'');
+    if (cur_pos_ < source_.size() && source_[cur_pos_] == '\'') {
+        char_const += source_[cur_pos_++];
+    }
+    cur_token_ = Token(TokenType::CHRCON, static_cast<int>(line_num_ + 1), std::move(char_const));
+}
+
+void Lexer::GetWord() {
     std::string word;
     word.reserve(64);
-    while (curPos_ < static_cast<int>(source_.size()) &&
-           (std::isalpha(static_cast<unsigned char>(source_[curPos_])) ||
-            std::isdigit(static_cast<unsigned char>(source_[curPos_])) || source_[curPos_] == '_')) {
-        word += static_cast<char>(source_[curPos_]);
-        curPos_++;
+    while (cur_pos_ < source_.size() &&
+           (std::isalpha(static_cast<unsigned char>(source_[cur_pos_])) ||
+            std::isdigit(static_cast<unsigned char>(source_[cur_pos_])) || source_[cur_pos_] == '_')) {
+        word += source_[cur_pos_];
+        cur_pos_++;
     }
-
-    auto reserved = getReservedWordType(word);
+    auto reserved = GetReservedWordType(word);
     if (reserved) {
-        curToken_ = Token(reserved.value(), lineNum_ + 1, std::move(word));
+        cur_token_ = Token(reserved.value(), static_cast<int>(line_num_ + 1), std::move(word));
     } else {
-        curToken_ = Token(TokenType::IDENFR, lineNum_ + 1, std::move(word));
+        cur_token_ = Token(TokenType::IDENFR, static_cast<int>(line_num_ + 1), std::move(word));
     }
 }
 
-void Lexer::getIntConst() {
-    // TODO：对应 Java getIntConst()：循环收集数字，curToken_ = Token(INTCON, lineNum_+1, 串)。
-    std::string intConst = "";
-
-    while (curPos_ < source_.size() && (std::isdigit(source_[curPos_]))) {
-        intConst += source_[curPos_];
-        curPos_++;
+void Lexer::GetIntConst() {
+    std::string int_const;
+    int_const.reserve(32);
+    while (cur_pos_ < source_.size() && std::isdigit(static_cast<unsigned char>(source_[cur_pos_]))) {
+        int_const += source_[cur_pos_];
+        cur_pos_++;
     }
-
-    curToken_ = Token(TokenType::INTCON, lineNum_ + 1, intConst);
+    cur_token_ = Token(TokenType::INTCON, static_cast<int>(line_num_ + 1), std::move(int_const));
 }
 
-void Lexer::getOperator() {
-    const auto length = static_cast<int>(source_.size());
-    if (curPos_ + 2 <= length) {
-        std::string_view two(source_.data() + curPos_, 2);
-        auto opt = getOperatorType(two);
+void Lexer::GetOperator() {
+    if (cur_pos_ + 2 <= source_.size()) {
+        std::string_view two(source_.data() + cur_pos_, 2);
+        auto opt = GetOperatorType(two);
         if (opt) {
-            curToken_ = Token(opt.value(), lineNum_ + 1, std::string(two));
-            curPos_ += 2;
+            cur_token_ = Token(opt.value(), static_cast<int>(line_num_ + 1), std::string(two));
+            cur_pos_ += 2;
             return;
         }
     }
-    if (curPos_ < length) {
-        std::string_view one(source_.data() + curPos_, 1);
-        auto opt = getOperatorType(one);
+    if (cur_pos_ < source_.size()) {
+        std::string_view one(source_.data() + cur_pos_, 1);
+        auto opt = GetOperatorType(one);
         if (opt) {
-            curToken_ = Token(opt.value(), lineNum_ + 1, std::string(one));
-            curPos_ += 1;
+            cur_token_ = Token(opt.value(), static_cast<int>(line_num_ + 1), std::string(one));
+            cur_pos_ += 1;
             return;
         }
     }
-    errorLog_.push_back({lineNum_ + 1, "a"});
-    curPos_++;
+    error_log_.push_back({static_cast<int>(line_num_ + 1), "a"});
+    cur_pos_++;
 }

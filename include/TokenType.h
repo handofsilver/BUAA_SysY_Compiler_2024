@@ -4,37 +4,33 @@
 #include <string>
 #include <string_view>
 
-// =============================================================================
-// 词法单元类型（与 requirement_1_lexer.md 表格一致）
-// C++ 使用 enum class 避免与整型隐式转换，且枚举值在 TokenType 命名空间下。
-// =============================================================================
-
+// TokenType: the type of the token
 enum class TokenType {
-    // 标识符 Identifier
+    // Identifier
     IDENFR, // <Ident>
 
-    // 常量 Constant
+    // Constant
     INTCON, // <IntConst>
     STRCON, // <StringConst>
     CHRCON, // <CharConst>
 
-    // 保留字 Reserved Word
-    MAINTK,
-    CONSTTK,
-    INTTK,
-    CHARTK,
-    BREAKTK,
-    CONTINUETK,
-    IFTK,
-    ELSETK,
-    VOIDTK,
-    FORTK,
-    GETINTTK,
-    GETCHARTK,
-    PRINTFTK,
-    RETURNTK,
+    // Reserved Word
+    MAINTK,     // main
+    CONSTTK,    // const
+    INTTK,      // int
+    CHARTK,     // char
+    BREAKTK,    // break
+    CONTINUETK, // continue
+    IFTK,       // if
+    ELSETK,     // else
+    VOIDTK,     // void
+    FORTK,      // for
+    GETINTTK,   // getint
+    GETCHARTK,  // getchar
+    PRINTFTK,   // printf
+    RETURNTK,   // return
 
-    // 运算符与界符 Operator and Punctuator
+    // Operator and Punctuator
     NOT,     // !
     AND,     // &&
     OR,      // ||
@@ -60,10 +56,9 @@ enum class TokenType {
     RBRACE,  // }
 };
 
-// 将类别码转为输出用的字符串（如 "IDENFR", "INTCON"），用于 lexer.txt。
-// 对应 Java 里输出时用枚举名；这里集中在一处便于维护。
-std::string toString(TokenType type);
+// convert the token type to a string for output, e.g. "IDENFR", "INTCON"
+std::string ToString(TokenType type);
 
-std::optional<TokenType> getOperatorType(std::string_view op);
+std::optional<TokenType> GetOperatorType(std::string_view op);
 
-std::optional<TokenType> getReservedWordType(std::string_view word);
+std::optional<TokenType> GetReservedWordType(std::string_view word);

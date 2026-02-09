@@ -6,42 +6,39 @@
 #include <utility>
 #include <vector>
 
-// =============================================================================
-// 词法分析器骨架。对应 Java Lexer，源文件读入 source，通过 next() 推进并设置 curToken。
-// 错误记录：行号 + 错误类别码（如 "a"），用 vector<pair<int, string>> 而非 ArrayList<String>。
-// =============================================================================
+// Lexer: reads source, advances via Next(), sets current token. Errors: (line, code) in vector.
 
 class Lexer {
 public:
-    // 从文件路径读取整份源码到 source_（如 testfile.txt）。
-    explicit Lexer(const std::string& filePath);
-    // 或直接传入已读入的源码字符串（与 Java Lexer(String source) 一致）。
-    explicit Lexer(std::string source);
+    explicit Lexer(const char* file_path);
+    explicit Lexer(std::string&& source); // move: for Lexer(std::move(source)); disambiguates from file path
 
-    std::optional<Token> getCurrentToken() const {
-        return curToken_;
-    }
-    bool notEnd() const {
-        return curPos_ < static_cast<int>(source_.size());
-    }
-    void next();
+    ~Lexer() = default;
 
-    // 错误列表：(行号, 错误类别码)。按行号从小到大输出到 error.txt。
-    const std::vector<std::pair<int, std::string>>& getErrorLog() const {
-        return errorLog_;
+    const std::optional<Token>& GetCurrentToken() const {
+        return cur_token_;
+    }
+    bool NotEnd() const {
+        return cur_pos_ < source_.size();
+    }
+    void Next();
+
+    /** Error log: (line number, error code). Output to error.txt when non-empty. */
+    const std::vector<std::pair<int, std::string>>& GetErrorLog() const {
+        return error_log_;
     }
 
 private:
     std::string source_;
-    int curPos_;
-    int lineNum_;
-    std::optional<Token> curToken_;
-    std::vector<std::pair<int, std::string>> errorLog_;
+    size_t cur_pos_;
+    size_t line_num_;
+    std::optional<Token> cur_token_;
+    std::vector<std::pair<int, std::string>> error_log_;
 
-    void skipComment();
-    void getStringConst();
-    void getCharConst();
-    void getWord();
-    void getIntConst();
-    void getOperator();
+    void SkipComment();
+    void GetStringConst();
+    void GetCharConst();
+    void GetWord();
+    void GetIntConst();
+    void GetOperator();
 };
