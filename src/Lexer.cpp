@@ -1,7 +1,9 @@
 #include "Lexer.h"
 #include "TokenType.h"
+#include <cctype>
 #include <fstream>
 #include <sstream>
+#include <string_view>
 
 Lexer::Lexer(std::string source) : source_(std::move(source)), curPos_(0), lineNum_(0), curToken_(std::nullopt) {}
 
@@ -14,14 +16,14 @@ Lexer::Lexer(const std::string& filePath) : curPos_(0), lineNum_(0), curToken_(s
 
 void Lexer::next() {
     curToken_ = std::nullopt;
-    // TODO：对应 Java next()：while (curPos < source.length()) 根据当前字符分支：
+    //   while (curPos < source.length()) 根据当前字符分支：
     //   '"' -> getStringConst(); break;
     //   '\'' -> getCharConst(); break;
-    //   字母或'_' -> getWord(); break;
-    //   数字 -> getIntConst(); break;
-    //   空白 -> 若 '\n' 则 lineNum++; curPos++; 继续循环
-    //   '/' 且下一个是 '/' 或 '*' -> skipComment(); 继续循环
-    //   否则 -> getOperator(); break;
+    //   letter or '_' -> getWord(); break;
+    //   number(digits) -> getIntConst(); break;
+    //   whitespace -> if '\n' then lineNum++; curPos++; continue loop
+    //   '/' and the next one is '/' or '*' -> skipComment(); continue loop
+    //   otherwise -> getOperator(); break;
 
     while (curPos_ < source_.length()) {
         char currentChar = source_[curPos_];
@@ -48,30 +50,32 @@ void Lexer::next() {
         }
         // others(whitespaces, comments, operators)
         else {
-            // whitespaces
             if (std::isspace(currentChar)) {
                 if (currentChar == '\n') {
                     lineNum_++;
                 }
                 curPos_++;
-            }
-            // comments
-            else if (currentChar == '/' && curPos_ + 1 < source_.length()) {
+            } else if (currentChar == '/' && curPos_ + 1 < static_cast<int>(source_.size())) {
                 char nextChar = source_[curPos_ + 1];
                 if (nextChar == '/' || nextChar == '*') {
                     skipComment();
                 } else {
+                    // DIV ('/') operator
                     getOperator();
+                    break;
                 }
+            } else {
+                getOperator();
+                break;
             }
         }
     }
 }
 
 void Lexer::skipComment() {
-    // TODO：对应 Java handleComment()：curPos++ 跳过第一个 '/'；
-    // 若下一字符是 '/'：单行注释，循环直到 '\n'，再 lineNum++, curPos++；
-    // 若下一字符是 '*'：多行注释，循环找 "*/"，途中遇到 '\n' 则 lineNum++。
+    // curPos++ to skip the first '/'
+    // if the next character is '/'：single line comment, loop until '\n', then lineNum++, curPos++
+    // if the next character is '*'：multi line comment, loop until "*/", meet '\n' then lineNum++
 
     curPos_++;
 
@@ -108,10 +112,12 @@ void Lexer::skipComment() {
 }
 
 void Lexer::getStringConst() {
-    // TODO：对应 Java getStringConst()：从当前 '"' 开始，用 string 或 stringstream
-    // 收集字符直到遇到未转义的 '"'；处理 \\ 转义；最后 curToken_ = Token(STRCON, lineNum_+1, 收集的串)。
+    // from the current '"' to the unescaped '"'
+    // handle \\ escape
+    // finally curToken_ = Token(STRCON, lineNum_+1, collected string)
 
-    std::string stringConst = "";
+    std::string stringConst;
+    stringConst.reserve(64);
 
     do {
         stringConst += source_[curPos_++];
@@ -119,46 +125,52 @@ void Lexer::getStringConst() {
             stringConst += source_[curPos_++];
             stringConst += source_[curPos_++];
         }
-    } while (curPos_ < source_.size() && source_[curPos_] != '\"');
+    } while (curPos_ < static_cast<int>(source_.size()) && source_[curPos_] != '\"');
 
-    curToken_ = Token(TokenType::STRCON, lineNum_ + 1, stringConst);
+    curToken_ = Token(TokenType::STRCON, lineNum_ + 1, std::move(stringConst));
 }
 
 void Lexer::getCharConst() {
-    // TODO：对应 Java getCharConst()：从当前 '\'' 开始收集直到配对 '\''，
-    // 处理转义；curToken_ = Token(CHRCON, lineNum_+1, 收集的串)。
+    // from the current '\'' to the unescaped '\''
+    // handle \\ escape
+    // finally curToken_ = Token(CHRCON, lineNum_+1, collected string)
 
-    std::string charConst = "";
+    std::string charConst;
+    charConst.reserve(64);
 
     do {
         charConst += source_[curPos_++];
-        if (source_[curPos_] == '\\') {
+        if (curPos_ < static_cast<int>(source_.size()) && source_[curPos_] == '\\') {
             charConst += source_[curPos_++];
             charConst += source_[curPos_++];
         }
-    } while (curPos_ < source_.size() && source_[curPos_] != '\'');
+    } while (curPos_ < static_cast<int>(source_.size()) && source_[curPos_] != '\'');
 
-    if (curPos_ < source_.size() && source_[curPos_] == '\'') {
+    if (curPos_ < static_cast<int>(source_.size()) && source_[curPos_] == '\'') {
         charConst += source_[curPos_++];
     }
 
-    curToken_ = Token(TokenType::CHRCON, lineNum_ + 1, charConst);
+    curToken_ = Token(TokenType::CHRCON, lineNum_ + 1, std::move(charConst));
 }
 
 void Lexer::getWord() {
     // TODO：对应 Java getWord()：循环收集字母/数字/'_'；然后判断是否为保留字
     // （可维护 map<string, TokenType> 或 if-else），是则 curToken_ = Token(保留字类型, lineNum_+1, 串)，
     // 否则 curToken_ = Token(IDENFR, lineNum_+1, 串)。
-    std::string word = "";
-    while (curPos_ < source_.size() && (std::isalpha(source_[curPos_]) || std::isdigit(source_[curPos_]) || source_[curPos_] == '_')) {
-        word += source_[curPos_];
+    std::string word;
+    word.reserve(64);
+    while (curPos_ < static_cast<int>(source_.size()) &&
+           (std::isalpha(static_cast<unsigned char>(source_[curPos_])) ||
+            std::isdigit(static_cast<unsigned char>(source_[curPos_])) || source_[curPos_] == '_')) {
+        word += static_cast<char>(source_[curPos_]);
         curPos_++;
     }
 
-    if (getReservedWordType(word)) {
-        curToken_ = Token(getReservedWordType(word).value(), lineNum_ + 1, word);
+    auto reserved = getReservedWordType(word);
+    if (reserved) {
+        curToken_ = Token(reserved.value(), lineNum_ + 1, std::move(word));
     } else {
-        curToken_ = Token(TokenType::IDENFR, lineNum_ + 1, word);
+        curToken_ = Token(TokenType::IDENFR, lineNum_ + 1, std::move(word));
     }
 }
 
@@ -175,15 +187,25 @@ void Lexer::getIntConst() {
 }
 
 void Lexer::getOperator() {
-    // TODO：对应 Java getOperator()：先看 curPos 起的两字符是否在运算符表（如 "&&","||","<=",">=","==","!="），
-    // 是则 curPos+=2 并设置对应 Token；否则看一字符运算符；若都不是则 errorLog_.push_back({lineNum_+1, "a"})，curPos++。
-    if (curPos_ + 1 < source_.size() && getOperatorType(source_.substr(curPos_, 2))) {
-        curToken_ = Token(getOperatorType(source_.substr(curPos_, 2)).value(), lineNum_ + 1, source_.substr(curPos_, 2));
-        curPos_ += 2;
-    } else if (curPos_ + 1 < source_.size() && getOperatorType(source_.substr(curPos_, 1))) {
-        curToken_ = Token(getOperatorType(source_.substr(curPos_, 1)).value(), lineNum_ + 1, source_.substr(curPos_, 1));
-        curPos_ += 1;
-    } else {
-        errorLog_.push_back({lineNum_ + 1, "a"});
+    const auto length = static_cast<int>(source_.size());
+    if (curPos_ + 2 <= length) {
+        std::string_view two(source_.data() + curPos_, 2);
+        auto opt = getOperatorType(two);
+        if (opt) {
+            curToken_ = Token(opt.value(), lineNum_ + 1, std::string(two));
+            curPos_ += 2;
+            return;
+        }
     }
+    if (curPos_ < length) {
+        std::string_view one(source_.data() + curPos_, 1);
+        auto opt = getOperatorType(one);
+        if (opt) {
+            curToken_ = Token(opt.value(), lineNum_ + 1, std::string(one));
+            curPos_ += 1;
+            return;
+        }
+    }
+    errorLog_.push_back({lineNum_ + 1, "a"});
+    curPos_++;
 }
