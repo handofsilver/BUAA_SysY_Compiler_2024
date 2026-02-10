@@ -1,3 +1,4 @@
+```plaintext
 编译单元 CompUnit → {Decl} {FuncDef} MainFuncDef
 声明 Decl → ConstDecl | VarDecl
 常量声明 ConstDecl → 'const' BType ConstDef { ',' ConstDef } ';'
@@ -41,3 +42,4 @@
 逻辑与表达式 LAndExp → EqExp | LAndExp '&&' EqExp
 逻辑或表达式 LOrExp → LAndExp | LOrExp '||' LAndExp
 常量表达式 ConstExp → AddExp 注：使用的 Ident 必须是常量
+```
