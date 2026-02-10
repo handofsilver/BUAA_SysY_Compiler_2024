@@ -6,7 +6,7 @@
 #include <vector>
 
 // =============================================================================
-// 前向声明 (Forward Declarations)
+// Forward declarations
 // =============================================================================
 class Block;
 class Stmt;
@@ -16,33 +16,29 @@ class InitVal;
 class FuncFParam;
 
 // =============================================================================
-// 辅助枚举：运算符类型 (OpType)
+// Operator type (OpType)
 // =============================================================================
 enum class OpType {
-    // 算术
     ADD,
     SUB,
     MUL,
     DIV,
     MOD,
-    // 关系
     LT,
     GT,
     LE,
     GE,
     EQ,
     NE,
-    // 逻辑
     AND,
     OR,
     NOT,
-    // 单目 + - !
     PLUS,
     MINU,
 };
 
 // =============================================================================
-// 基本类型 (BType) / 函数类型 (FuncType 与 BType 共用)
+// Basic type (BType) / function type (FuncType shares BType)
 // =============================================================================
 enum class BType {
     INT,
@@ -51,7 +47,7 @@ enum class BType {
 };
 
 // =============================================================================
-// 基类 (Base Class)
+// Base class
 // =============================================================================
 class ASTNode {
 public:
@@ -66,8 +62,7 @@ protected:
 };
 
 // =============================================================================
-// BlockItem：语句块项，对应 BlockItem → Decl | Stmt
-// 继承链：ASTNode → BlockItem → Decl / Stmt
+// BlockItem: BlockItem -> Decl | Stmt. Inheritance: ASTNode -> BlockItem -> Decl/Stmt
 // =============================================================================
 class BlockItem : public ASTNode {
 public:
@@ -75,24 +70,24 @@ public:
 };
 
 // =============================================================================
-// 声明层次 (Decl)：Decl → ConstDecl | VarDecl，现继承自 BlockItem
+// Decl: Decl -> ConstDecl | VarDecl (inherits BlockItem)
 // =============================================================================
 class Decl : public BlockItem {
 public:
     ~Decl() override = default;
 };
 
-// --- Def / ConstDef / VarDef 前置依赖 Exp, ConstInitVal, InitVal，故在 Exp 家族之后定义 ---
+// Def / ConstDef / VarDef depend on Exp, ConstInitVal, InitVal; defined after Exp family.
 
 // =============================================================================
-// 表达式 (Exp) 家族
+// Expression (Exp) family
 // =============================================================================
 class Exp : public ASTNode {
 public:
     ~Exp() override = default;
 };
 
-/** 左值：Ident [ '[' Exp ']' ] */
+/** LVal: Ident [ '[' Exp ']' ]. */
 class LVal : public Exp {
 public:
     std::string ident;
@@ -102,7 +97,7 @@ public:
     ~LVal() override = default;
 };
 
-/** 数值 IntConst */
+/** Number: IntConst. */
 class Number : public Exp {
 public:
     int int_const;
@@ -111,16 +106,16 @@ public:
     ~Number() override = default;
 };
 
-/** 字符字面量 CharConst */
+/** Character: CharConst. */
 class Character : public Exp {
 public:
-    char char_const; // 或 std::string 若需支持转义等
+    char char_const;
 
     explicit Character(char value) : char_const(value) {}
     ~Character() override = default;
 };
 
-/** 双目运算：MulExp/AddExp/RelExp/EqExp/LAndExp/LOrExp 等 */
+/** Binary expression: MulExp/AddExp/RelExp/EqExp/LAndExp/LOrExp. */
 class BinaryExp : public Exp {
 public:
     std::unique_ptr<Exp> lhs;
@@ -131,7 +126,7 @@ public:
     ~BinaryExp() override = default;
 };
 
-/** 单目运算：UnaryOp UnaryExp (+ / - / !) */
+/** Unary expression: UnaryOp UnaryExp (+ / - / !). */
 class UnaryExp : public Exp {
 public:
     std::unique_ptr<Exp> operand;
@@ -141,7 +136,7 @@ public:
     ~UnaryExp() override = default;
 };
 
-/** 函数实参表：Exp { ',' Exp } */
+/** FuncRParams: Exp { ',' Exp }. */
 class FuncRParams : public ASTNode {
 public:
     std::vector<std::unique_ptr<Exp>> func_r_params;
@@ -150,19 +145,18 @@ public:
     ~FuncRParams() override = default;
 };
 
-/** 函数调用：Ident '(' [FuncRParams] ')' */
+/** Function call: Ident '(' [FuncRParams] ')'. */
 class FuncCall : public Exp {
 public:
     std::string ident;
-    std::unique_ptr<FuncRParams> func_r_params; // 可为空表示无实参
+    std::unique_ptr<FuncRParams> func_r_params;
 
     FuncCall(std::string ident, std::unique_ptr<FuncRParams> func_r_params) : ident(std::move(ident)), func_r_params(std::move(func_r_params)) {}
     ~FuncCall() override = default;
 };
 
 /**
- * 常量表达式 ConstExp → AddExp。
- * 文法上等价于 Exp，此处用包装节点区分“仅允许常量”的语义，便于后续语义分析。
+ * ConstExp -> AddExp. Wrapper to mark constant-only context for semantic analysis.
  */
 class ConstExp : public Exp {
 public:
@@ -173,10 +167,8 @@ public:
 };
 
 // =============================================================================
-// 初值节点：ConstInitVal / InitVal（递归结构）
-// ConstInitVal → ConstExp | '{' [ ConstExp { ',' ConstExp } ] '}' | StringConst
-// InitVal      → Exp | '{' [ Exp { ',' Exp } ] '}' | StringConst
-// 实现方案：用 kind 区分“单表达式 / 列表 / 字符串”，列表为 vector<unique_ptr<同类型>>。
+// Init values: ConstInitVal / InitVal (recursive).
+// ConstInitVal -> ConstExp | '{' ... '}' | StringConst; InitVal -> Exp | '{' ... '}' | StringConst.
 // =============================================================================
 enum class InitValKind { SINGLE_EXP,
                          LIST,
@@ -185,9 +177,9 @@ enum class InitValKind { SINGLE_EXP,
 class ConstInitVal : public ASTNode {
 public:
     InitValKind kind;
-    std::unique_ptr<Exp> single_exp;                 // SINGLE_EXP 时有效
-    std::vector<std::unique_ptr<ConstInitVal>> list; // LIST 时有效
-    std::string string_val;                          // STRING 时有效
+    std::unique_ptr<Exp> single_exp;
+    std::vector<std::unique_ptr<ConstInitVal>> list;
+    std::string string_val;
 
     ConstInitVal(InitValKind kind, std::unique_ptr<Exp> single_exp,
                  std::vector<std::unique_ptr<ConstInitVal>> list,
@@ -214,7 +206,7 @@ public:
 };
 
 // =============================================================================
-// 定义层次 (Def)：ConstDef / VarDef
+// Def: ConstDef / VarDef
 // =============================================================================
 class Def : public ASTNode {
 public:
@@ -224,7 +216,7 @@ public:
 class ConstDef : public Def {
 public:
     std::string ident;
-    std::vector<std::unique_ptr<Exp>> dims; // 维度用 ConstExp，此处用 Exp 表示
+    std::vector<std::unique_ptr<Exp>> dims;
     std::unique_ptr<ConstInitVal> const_init_val;
 
     ConstDef(std::string ident, std::vector<std::unique_ptr<Exp>> dims,
@@ -238,7 +230,7 @@ class VarDef : public Def {
 public:
     std::string ident;
     std::vector<std::unique_ptr<Exp>> dims;
-    std::unique_ptr<InitVal> init_val; // 可选，无 '=' 时为空
+    std::unique_ptr<InitVal> init_val;
 
     VarDef(std::string ident, std::vector<std::unique_ptr<Exp>> dims,
            std::unique_ptr<InitVal> init_val) : ident(std::move(ident)),
@@ -269,20 +261,20 @@ public:
 };
 
 // =============================================================================
-// 函数形参 FuncFParam → BType Ident ['[' ']']
+// FuncFParam: BType Ident ['[' ']']
 // =============================================================================
 class FuncFParam : public ASTNode {
 public:
     BType btype;
     std::string ident;
-    bool is_array; // 是否有 '[' ']'
+    bool is_array;
 
     FuncFParam(BType btype, std::string ident, bool is_array) : btype(btype), ident(std::move(ident)), is_array(is_array) {}
     ~FuncFParam() override = default;
 };
 
 // =============================================================================
-// 语句块 (Block)：须在 Stmt 之前定义，因 BlockStmt 持有 unique_ptr<Block>
+// Block: defined before Stmt so that BlockStmt can hold unique_ptr<Block>
 // =============================================================================
 class Block : public ASTNode {
 public:
@@ -293,7 +285,7 @@ public:
 };
 
 // =============================================================================
-// 语句 (Stmt) 家族：Stmt 继承自 BlockItem
+// Statement (Stmt) family; Stmt inherits BlockItem
 // =============================================================================
 class Stmt : public BlockItem {
 public:
@@ -310,16 +302,16 @@ public:
     ~AssignStmt() override = default;
 };
 
-/** [Exp] ';' */
+/** [Exp] ';'. */
 class ExpStmt : public Stmt {
 public:
-    std::optional<std::unique_ptr<Exp>> exp; // 可为空
+    std::optional<std::unique_ptr<Exp>> exp;
 
     explicit ExpStmt(std::optional<std::unique_ptr<Exp>> exp) : exp(std::move(exp)) {}
     ~ExpStmt() override = default;
 };
 
-/** Block 作为语句（直接复用 Block 节点） */
+/** Block as statement (reuses Block node). */
 class BlockStmt : public Stmt {
 public:
     std::unique_ptr<Block> block;
@@ -333,7 +325,7 @@ class IfStmt : public Stmt {
 public:
     std::unique_ptr<Exp> cond;
     std::unique_ptr<Stmt> then_stmt;
-    std::unique_ptr<Stmt> else_stmt; // 可为空
+    std::unique_ptr<Stmt> else_stmt;
 
     IfStmt(std::unique_ptr<Exp> cond, std::unique_ptr<Stmt> then_stmt,
            std::unique_ptr<Stmt> else_stmt) : cond(std::move(cond)),
@@ -342,12 +334,12 @@ public:
     ~IfStmt() override = default;
 };
 
-/** for ( [ForStmt] ; [Cond] ; [ForStmt] ) Stmt */
+/** for ( [ForStmt] ; [Cond] ; [ForStmt] ) Stmt. */
 class ForStmt : public Stmt {
 public:
-    std::optional<std::unique_ptr<Stmt>> init; // 第一个 ForStmt（赋值）
+    std::optional<std::unique_ptr<Stmt>> init;
     std::optional<std::unique_ptr<Exp>> cond;
-    std::optional<std::unique_ptr<Stmt>> step; // 第二个 ForStmt（赋值）
+    std::optional<std::unique_ptr<Stmt>> step;
     std::unique_ptr<Stmt> body;
 
     ForStmt(std::optional<std::unique_ptr<Stmt>> init,
@@ -360,7 +352,7 @@ public:
     ~ForStmt() override = default;
 };
 
-// /** while ( Cond ) Stmt（若文法扩展支持 while，可复用此节点） */
+// /** WhileStmt: optional when grammar supports while. */
 // class WhileStmt : public Stmt {
 // public:
 //     std::unique_ptr<Exp> cond;
@@ -422,7 +414,7 @@ public:
 };
 
 // =============================================================================
-// 函数定义与主函数
+// Function definition and main
 // =============================================================================
 class FuncDef : public ASTNode {
 public:
@@ -449,7 +441,7 @@ public:
 };
 
 // =============================================================================
-// 编译单元 (CompUnit) — 根节点
+// CompUnit (root node)
 // =============================================================================
 class CompUnit : public ASTNode {
 public:

@@ -6,12 +6,15 @@
 #include <utility>
 #include <vector>
 
-// Lexer: reads source, advances via Next(), sets current token. Errors: (line, code) in vector.
+/**
+ * Lexer: reads source, advances via Next(), sets current token.
+ * Errors are recorded as (line number, error code) in GetErrorLog().
+ */
 
 class Lexer {
 public:
     explicit Lexer(const char* file_path);
-    explicit Lexer(std::string&& source); // move: for Lexer(std::move(source)); disambiguates from file path
+    explicit Lexer(std::string&& source);
 
     ~Lexer() = default;
 
@@ -23,7 +26,7 @@ public:
     }
     void Next();
 
-    /** Error log: (line number, error code). Output to error.txt when non-empty. */
+    /** Error log: (line number, error code). Merge with Parser::GetErrorLog() for error.txt. */
     const std::vector<std::pair<int, std::string>>& GetErrorLog() const {
         return error_log_;
     }
