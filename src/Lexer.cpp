@@ -17,7 +17,7 @@ Lexer::Lexer(const char* file_path) : cur_pos_(0), line_num_(0), cur_token_(std:
 void Lexer::Next() {
     cur_token_ = std::nullopt;
 
-    while (cur_pos_ < source_.size()) {
+    while (NotEnd()) {
         char cur_ch = source_[cur_pos_];
 
         if (cur_ch == '\"') {
@@ -60,27 +60,27 @@ void Lexer::Next() {
 void Lexer::SkipComment() {
     cur_pos_++;
 
-    if (cur_pos_ < source_.size() && source_[cur_pos_] == '/') {
-        while (cur_pos_ < source_.size() && source_[cur_pos_] != '\n') {
+    if (NotEnd() && source_[cur_pos_] == '/') {
+        while (NotEnd() && source_[cur_pos_] != '\n') {
             cur_pos_++;
         }
-        if (cur_pos_ < source_.size() && source_[cur_pos_] == '\n') {
+        if (NotEnd() && source_[cur_pos_] == '\n') {
             line_num_++;
             cur_pos_++;
         }
-    } else if (cur_pos_ < source_.size() && source_[cur_pos_] == '*') {
+    } else if (NotEnd() && source_[cur_pos_] == '*') {
         cur_pos_++;
-        while (cur_pos_ < source_.size()) {
-            while (cur_pos_ < source_.size() && source_[cur_pos_] != '*') {
+        while (NotEnd()) {
+            while (NotEnd() && source_[cur_pos_] != '*') {
                 if (source_[cur_pos_] == '\n') {
                     line_num_++;
                 }
                 cur_pos_++;
             }
-            while (cur_pos_ < source_.size() && source_[cur_pos_] == '*') {
+            while (NotEnd() && source_[cur_pos_] == '*') {
                 cur_pos_++;
             }
-            if (cur_pos_ < source_.size() && source_[cur_pos_] == '/') {
+            if (NotEnd() && source_[cur_pos_] == '/') {
                 cur_pos_++;
                 break;
             }
@@ -93,14 +93,14 @@ void Lexer::GetStringConst() {
     str_const.reserve(64);
     do {
         str_const += source_[cur_pos_++];
-        if (cur_pos_ < source_.size() && source_[cur_pos_] == '\\') {
+        if (NotEnd() && source_[cur_pos_] == '\\') {
             str_const += source_[cur_pos_++];
-            if (cur_pos_ < source_.size()) {
+            if (NotEnd()) {
                 str_const += source_[cur_pos_++];
             }
         }
-    } while (cur_pos_ < source_.size() && source_[cur_pos_] != '\"');
-    if (cur_pos_ < source_.size() && source_[cur_pos_] == '\"') {
+    } while (NotEnd() && source_[cur_pos_] != '\"');
+    if (NotEnd() && source_[cur_pos_] == '\"') {
         str_const += source_[cur_pos_++];
     }
     cur_token_ = Token(TokenType::STRCON, static_cast<int>(line_num_ + 1), std::move(str_const));
@@ -111,14 +111,14 @@ void Lexer::GetCharConst() {
     char_const.reserve(64);
     do {
         char_const += source_[cur_pos_++];
-        if (cur_pos_ < source_.size() && source_[cur_pos_] == '\\') {
+        if (NotEnd() && source_[cur_pos_] == '\\') {
             char_const += source_[cur_pos_++];
-            if (cur_pos_ < source_.size()) {
+            if (NotEnd()) {
                 char_const += source_[cur_pos_++];
             }
         }
-    } while (cur_pos_ < source_.size() && source_[cur_pos_] != '\'');
-    if (cur_pos_ < source_.size() && source_[cur_pos_] == '\'') {
+    } while (NotEnd() && source_[cur_pos_] != '\'');
+    if (NotEnd() && source_[cur_pos_] == '\'') {
         char_const += source_[cur_pos_++];
     }
     cur_token_ = Token(TokenType::CHRCON, static_cast<int>(line_num_ + 1), std::move(char_const));
@@ -127,7 +127,7 @@ void Lexer::GetCharConst() {
 void Lexer::GetWord() {
     std::string word;
     word.reserve(64);
-    while (cur_pos_ < source_.size() &&
+    while (NotEnd() &&
            (std::isalpha(static_cast<unsigned char>(source_[cur_pos_])) ||
             std::isdigit(static_cast<unsigned char>(source_[cur_pos_])) || source_[cur_pos_] == '_')) {
         word += source_[cur_pos_];
@@ -144,7 +144,7 @@ void Lexer::GetWord() {
 void Lexer::GetIntConst() {
     std::string int_const;
     int_const.reserve(32);
-    while (cur_pos_ < source_.size() && std::isdigit(static_cast<unsigned char>(source_[cur_pos_]))) {
+    while (NotEnd() && std::isdigit(static_cast<unsigned char>(source_[cur_pos_]))) {
         int_const += source_[cur_pos_];
         cur_pos_++;
     }
@@ -152,7 +152,7 @@ void Lexer::GetIntConst() {
 }
 
 void Lexer::GetOperator() {
-    if (cur_pos_ + 2 <= source_.size()) {
+    if (cur_pos_ + 1 < source_.size()) {
         std::string_view two(source_.data() + cur_pos_, 2);
         auto opt = GetOperatorType(two);
         if (opt) {
@@ -161,7 +161,7 @@ void Lexer::GetOperator() {
             return;
         }
     }
-    if (cur_pos_ < source_.size()) {
+    if (NotEnd()) {
         std::string_view one(source_.data() + cur_pos_, 1);
         auto opt = GetOperatorType(one);
         if (opt) {
@@ -172,4 +172,32 @@ void Lexer::GetOperator() {
     }
     error_log_.push_back({static_cast<int>(line_num_ + 1), "a"});
     cur_pos_++;
+}
+
+// -------------------------------------------------------------------------
+// Lookahead (read-only peek without consuming)
+// -------------------------------------------------------------------------
+std::optional<Token> Lexer::PeekNext() {
+    const size_t save_pos = cur_pos_;
+    const size_t save_line = line_num_;
+    const std::optional<Token> save_token = cur_token_;
+    Next();
+    std::optional<Token> result = cur_token_;
+    cur_pos_ = save_pos;
+    line_num_ = save_line;
+    cur_token_ = save_token;
+    return result;
+}
+
+std::optional<Token> Lexer::PeekNext2() {
+    const size_t save_pos = cur_pos_;
+    const size_t save_line = line_num_;
+    const std::optional<Token> save_token = cur_token_;
+    Next();
+    Next();
+    std::optional<Token> result = cur_token_;
+    cur_pos_ = save_pos;
+    line_num_ = save_line;
+    cur_token_ = save_token;
+    return result;
 }

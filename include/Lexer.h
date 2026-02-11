@@ -21,15 +21,30 @@ public:
     const std::optional<Token>& GetCurrentToken() const {
         return cur_token_;
     }
+
     bool NotEnd() const {
         return cur_pos_ < source_.size();
     }
+
     void Next();
 
     /** Error log: (line number, error code). Merge with Parser::GetErrorLog() for error.txt. */
     const std::vector<std::pair<int, std::string>>& GetErrorLog() const {
         return error_log_;
     }
+
+    /**
+     * One-token lookahead: returns the next token without consuming it.
+     * Use to distinguish productions that share a prefix (e.g. Ident for LVal vs
+     * Ident '(' for function call). Implemented by save state -> Next() -> capture -> restore.
+     */
+    std::optional<Token> PeekNext();
+
+    /**
+     * Two-token lookahead: returns the token two positions ahead without consuming.
+     * E.g. CompUnit: "int ident (" is FuncDef; "int ident ;" is Decl.
+     */
+    std::optional<Token> PeekNext2();
 
 private:
     std::string source_;

@@ -22,6 +22,17 @@
  * error.txt. No inheritance from an error-handling base is needed; the
  * driver can merge Lexer::GetErrorLog() and Parser::GetErrorLog() when
  * writing error.txt.
+ *
+ * Syntax error codes (see docs/2024_SysY_detailed.md "文法符号与错误类型对应"):
+ *   i = missing ';',  j = missing ')',  k = missing ']'.
+ *   (a = illegal symbol is lexical.) Defensive branches may use a fallback code.
+ *
+ * Lookahead (no backtracking): The original Java reference used lookAhead/lookDoubleAhead plus
+ * save/restore and Handler.save/restore in parseStmtOther to "try Exp, then backtrack
+ * to LVal = ...". In C++, we avoid that by having Lexer::PeekNext() / PeekNext2() return
+ * the next token(s) without consuming (implemented by save state -> Next() -> capture ->
+ * restore). The parser then uses LookaheadIs(t) / Lookahead2Is(t) to decide the
+ * production (e.g. Ident + next=='(', '=', or other) and never needs to backtrack.
  */
 class Parser {
 public:
@@ -60,7 +71,20 @@ public:
     // -------------------------------------------------------------------------
     // Statements
     // -------------------------------------------------------------------------
-    /** Dispatches to the appropriate Stmt production. */
+    /**
+     * Dispatches to the appropriate Stmt production.
+     *
+     * Implementation note (ParseStmtOther):
+     * - CurIs(PLUS/MINU/NOT/INTCON/CHRCON/LPARENT) -> expression statement; ParseExp(), ExpectSemicolon().
+     * - CurIs(IDENFR) and LookaheadIs(LPARENT) -> expression (function call); ParseExp(), ExpectSemicolon().
+     * - CurIs(IDENFR) and LookaheadIs(ASSIGN) -> LVal '=' Exp | getint | getchar; ParseLVal(), consume '=', etc.
+     * - CurIs(IDENFR) and other (e.g. LBRACK, so "a[10]" or "a[10]=2"): one-token lookahead cannot distinguish
+     *   "[Exp] ';'" (e.g. a[10];) from "LVal '=' Exp ';'" (e.g. a[10]=2;). Parse LVal first; then:
+     *   - if CurIs(ASSIGN) -> assignment (or getint/getchar);
+     *   - if CurIs(SEMICN) -> expression statement (the LVal is the whole expression);
+     *   - else (e.g. PLUS) -> expression starting with that LVal, parse rest of Exp (e.g. ParseAddExpTail or
+     *     re-enter expression layer so that the already-consumed LVal is the first PrimaryExp), then ExpectSemicolon().
+     */
     std::unique_ptr<Stmt> ParseStmt();
 
     // -------------------------------------------------------------------------
@@ -97,15 +121,37 @@ private:
     // Token helpers (TODO: implement in Parser.cpp)
     // -------------------------------------------------------------------------
     /** Returns current token if available. */
-    const std::optional<Token>& Cur() const;
-    /** Returns true if current token has type t. */
-    bool CurIs(TokenType t) const;
+    const std::optional<Token>& Cur() const {
+        return lexer_.GetCurrentToken();
+    }
+
+    /** Returns true if current token has type t. Safe when Cur() is empty (returns false). */
+    bool CurIs(TokenType t) const {
+        return Cur().has_value() && Cur()->type == t;
+    }
+
+    /**
+     * Returns true if the next token (without consuming) has type t.
+     * Use to avoid backtracking: e.g. Ident + next=='(', next=='=', next==other.
+     */
+    bool LookaheadIs(TokenType t);
+
+    /**
+     * Returns true if the token two ahead has type t (e.g. CompUnit: int ident ( ).
+     */
+    bool Lookahead2Is(TokenType t);
+
     /** Advance to next token. */
-    void Advance();
+    void Advance() {
+        lexer_.Next();
+    }
+
     /** Record a syntax error (line, code) and optionally synchronize; parsing continues. */
     void RecordError(int line, std::string code);
+
     /** Emit current token to parser_out_ if enabled. */
     void EmitToken();
+
     /** Emit a syntax component name like "<CompUnit>" if enabled. */
     void EmitSyntax(std::string_view name);
 
