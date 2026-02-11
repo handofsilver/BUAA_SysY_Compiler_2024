@@ -11,6 +11,7 @@ CompileFlags:
     - "-Wno-unknown-pragmas"
     - "-Wno-c++98-compat"
     - "-Wno-c++98-compat-pedantic"
+    - "-Wno-padded"
 
 Diagnostics:
   # 屏蔽那些即便加了 flag 还有可能漏网的顽固警告 (对应你截图中的报错代码)

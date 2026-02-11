@@ -3,6 +3,8 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <vector>
 
 // =============================================================================
@@ -35,7 +37,34 @@ enum class OpType {
     NOT,
     PLUS,
     MINU,
+    NONE,
 };
+
+OpType GetOperatorType(std::string_view op) {
+    static const std::unordered_map<std::string, OpType> operator_map = {
+        {"+",  OpType::ADD },
+        {"-",  OpType::SUB },
+        {"*",  OpType::MUL },
+        {"/",  OpType::DIV },
+        {"%",  OpType::MOD },
+        {"<",  OpType::LT  },
+        {">",  OpType::GT  },
+        {"<=", OpType::LE  },
+        {">=", OpType::GE  },
+        {"==", OpType::EQ  },
+        {"!=", OpType::NE  },
+        {"&&", OpType::AND },
+        {"||", OpType::OR  },
+        {"!",  OpType::NOT },
+        {"+",  OpType::PLUS},
+        {"-",  OpType::MINU},
+    };
+    auto it = operator_map.find(std::string(op));
+    if (it != operator_map.end()) {
+        return it->second;
+    }
+    return OpType::NONE;
+}
 
 // =============================================================================
 // Basic type (BType) / function type (FuncType shares BType)
@@ -91,9 +120,13 @@ public:
 class LVal : public Exp {
 public:
     std::string ident;
-    std::vector<std::unique_ptr<Exp>> index;
+    std::unique_ptr<Exp> index;
 
-    LVal(std::string ident, std::vector<std::unique_ptr<Exp>> index) : ident(std::move(ident)), index(std::move(index)) {}
+    LVal(std::string ident, std::unique_ptr<Exp> index) :
+    ident(std::move(ident)),
+    index(std::move(index)) {}
+    LVal(std::string ident) : ident(std::move(ident)) {}
+
     ~LVal() override = default;
 };
 
@@ -122,7 +155,10 @@ public:
     std::unique_ptr<Exp> rhs;
     OpType op;
 
-    BinaryExp(std::unique_ptr<Exp> lhs, std::unique_ptr<Exp> rhs, OpType op) : lhs(std::move(lhs)), rhs(std::move(rhs)), op(op) {}
+    BinaryExp(std::unique_ptr<Exp> lhs, std::unique_ptr<Exp> rhs, OpType op) :
+    lhs(std::move(lhs)),
+    rhs(std::move(rhs)),
+    op(op) {}
     ~BinaryExp() override = default;
 };
 
@@ -141,7 +177,8 @@ class FuncRParams : public ASTNode {
 public:
     std::vector<std::unique_ptr<Exp>> func_r_params;
 
-    explicit FuncRParams(std::vector<std::unique_ptr<Exp>> func_r_params) : func_r_params(std::move(func_r_params)) {}
+    explicit FuncRParams(std::vector<std::unique_ptr<Exp>> func_r_params) :
+    func_r_params(std::move(func_r_params)) {}
     ~FuncRParams() override = default;
 };
 
@@ -151,7 +188,9 @@ public:
     std::string ident;
     std::unique_ptr<FuncRParams> func_r_params;
 
-    FuncCall(std::string ident, std::unique_ptr<FuncRParams> func_r_params) : ident(std::move(ident)), func_r_params(std::move(func_r_params)) {}
+    FuncCall(std::string ident, std::unique_ptr<FuncRParams> func_r_params) :
+    ident(std::move(ident)),
+    func_r_params(std::move(func_r_params)) {}
     ~FuncCall() override = default;
 };
 
@@ -170,9 +209,7 @@ public:
 // Init values: ConstInitVal / InitVal (recursive).
 // ConstInitVal -> ConstExp | '{' ... '}' | StringConst; InitVal -> Exp | '{' ... '}' | StringConst.
 // =============================================================================
-enum class InitValKind { SINGLE_EXP,
-                         LIST,
-                         STRING };
+enum class InitValKind { SINGLE_EXP, LIST, STRING };
 
 class ConstInitVal : public ASTNode {
 public:
@@ -182,11 +219,11 @@ public:
     std::string string_val;
 
     ConstInitVal(InitValKind kind, std::unique_ptr<Exp> single_exp,
-                 std::vector<std::unique_ptr<ConstInitVal>> list,
-                 std::string string_val) : kind(kind),
-                                           single_exp(std::move(single_exp)),
-                                           list(std::move(list)),
-                                           string_val(std::move(string_val)) {}
+                 std::vector<std::unique_ptr<ConstInitVal>> list, std::string string_val) :
+    kind(kind),
+    single_exp(std::move(single_exp)),
+    list(std::move(list)),
+    string_val(std::move(string_val)) {}
     ~ConstInitVal() override = default;
 };
 
@@ -198,10 +235,11 @@ public:
     std::string string_val;
 
     InitVal(InitValKind kind, std::unique_ptr<Exp> single_exp,
-            std::vector<std::unique_ptr<InitVal>> list, std::string string_val) : kind(kind),
-                                                                                  single_exp(std::move(single_exp)),
-                                                                                  list(std::move(list)),
-                                                                                  string_val(std::move(string_val)) {}
+            std::vector<std::unique_ptr<InitVal>> list, std::string string_val) :
+    kind(kind),
+    single_exp(std::move(single_exp)),
+    list(std::move(list)),
+    string_val(std::move(string_val)) {}
     ~InitVal() override = default;
 };
 
@@ -220,9 +258,10 @@ public:
     std::unique_ptr<ConstInitVal> const_init_val;
 
     ConstDef(std::string ident, std::vector<std::unique_ptr<Exp>> dims,
-             std::unique_ptr<ConstInitVal> const_init_val) : ident(std::move(ident)),
-                                                             dims(std::move(dims)),
-                                                             const_init_val(std::move(const_init_val)) {}
+             std::unique_ptr<ConstInitVal> const_init_val) :
+    ident(std::move(ident)),
+    dims(std::move(dims)),
+    const_init_val(std::move(const_init_val)) {}
     ~ConstDef() override = default;
 };
 
@@ -233,9 +272,10 @@ public:
     std::unique_ptr<InitVal> init_val;
 
     VarDef(std::string ident, std::vector<std::unique_ptr<Exp>> dims,
-           std::unique_ptr<InitVal> init_val) : ident(std::move(ident)),
-                                                dims(std::move(dims)),
-                                                init_val(std::move(init_val)) {}
+           std::unique_ptr<InitVal> init_val) :
+    ident(std::move(ident)),
+    dims(std::move(dims)),
+    init_val(std::move(init_val)) {}
     ~VarDef() override = default;
 };
 
@@ -247,7 +287,9 @@ public:
     BType btype;
     std::vector<std::unique_ptr<ConstDef>> const_defs;
 
-    ConstDecl(BType btype, std::vector<std::unique_ptr<ConstDef>> const_defs) : btype(btype), const_defs(std::move(const_defs)) {}
+    ConstDecl(BType btype, std::vector<std::unique_ptr<ConstDef>> const_defs) :
+    btype(btype),
+    const_defs(std::move(const_defs)) {}
     ~ConstDecl() override = default;
 };
 
@@ -256,7 +298,9 @@ public:
     BType btype;
     std::vector<std::unique_ptr<VarDef>> var_defs;
 
-    VarDecl(BType btype, std::vector<std::unique_ptr<VarDef>> var_defs) : btype(btype), var_defs(std::move(var_defs)) {}
+    VarDecl(BType btype, std::vector<std::unique_ptr<VarDef>> var_defs) :
+    btype(btype),
+    var_defs(std::move(var_defs)) {}
     ~VarDecl() override = default;
 };
 
@@ -269,7 +313,10 @@ public:
     std::string ident;
     bool is_array;
 
-    FuncFParam(BType btype, std::string ident, bool is_array) : btype(btype), ident(std::move(ident)), is_array(is_array) {}
+    FuncFParam(BType btype, std::string ident, bool is_array) :
+    btype(btype),
+    ident(std::move(ident)),
+    is_array(is_array) {}
     ~FuncFParam() override = default;
 };
 
@@ -280,13 +327,25 @@ class Block : public ASTNode {
 public:
     std::vector<std::unique_ptr<BlockItem>> block_items;
 
-    explicit Block(std::vector<std::unique_ptr<BlockItem>> block_items) : block_items(std::move(block_items)) {}
+    explicit Block(std::vector<std::unique_ptr<BlockItem>> block_items) :
+    block_items(std::move(block_items)) {}
     ~Block() override = default;
 };
 
 // =============================================================================
 // Statement (Stmt) family; Stmt inherits BlockItem
 // =============================================================================
+class ForInitOrStep : public ASTNode {
+public:
+    std::unique_ptr<LVal> lval;
+    std::unique_ptr<Exp> exp;
+
+    ForInitOrStep(std::unique_ptr<LVal> lval, std::unique_ptr<Exp> exp) :
+    lval(std::move(lval)),
+    exp(std::move(exp)) {}
+    ~ForInitOrStep() override = default;
+};
+
 class Stmt : public BlockItem {
 public:
     ~Stmt() override = default;
@@ -298,7 +357,9 @@ public:
     std::unique_ptr<LVal> lval;
     std::unique_ptr<Exp> exp;
 
-    AssignStmt(std::unique_ptr<LVal> lval, std::unique_ptr<Exp> exp) : lval(std::move(lval)), exp(std::move(exp)) {}
+    AssignStmt(std::unique_ptr<LVal> lval, std::unique_ptr<Exp> exp) :
+    lval(std::move(lval)),
+    exp(std::move(exp)) {}
     ~AssignStmt() override = default;
 };
 
@@ -325,42 +386,33 @@ class IfStmt : public Stmt {
 public:
     std::unique_ptr<Exp> cond;
     std::unique_ptr<Stmt> then_stmt;
-    std::unique_ptr<Stmt> else_stmt;
+    std::optional<std::unique_ptr<Stmt>> else_stmt;
 
     IfStmt(std::unique_ptr<Exp> cond, std::unique_ptr<Stmt> then_stmt,
-           std::unique_ptr<Stmt> else_stmt) : cond(std::move(cond)),
-                                              then_stmt(std::move(then_stmt)),
-                                              else_stmt(std::move(else_stmt)) {}
+           std::optional<std::unique_ptr<Stmt>> else_stmt) :
+    cond(std::move(cond)),
+    then_stmt(std::move(then_stmt)),
+    else_stmt(std::move(else_stmt)) {}
     ~IfStmt() override = default;
 };
 
-/** for ( [ForStmt] ; [Cond] ; [ForStmt] ) Stmt. */
+/** for ( [ForInitOrStep] ; [Cond] ; [ForInitOrStep] ) Stmt. */
 class ForStmt : public Stmt {
 public:
-    std::optional<std::unique_ptr<Stmt>> init;
+    std::optional<std::unique_ptr<ForInitOrStep>> init;
     std::optional<std::unique_ptr<Exp>> cond;
-    std::optional<std::unique_ptr<Stmt>> step;
+    std::optional<std::unique_ptr<ForInitOrStep>> step;
     std::unique_ptr<Stmt> body;
 
-    ForStmt(std::optional<std::unique_ptr<Stmt>> init,
+    ForStmt(std::optional<std::unique_ptr<ForInitOrStep>> init,
             std::optional<std::unique_ptr<Exp>> cond,
-            std::optional<std::unique_ptr<Stmt>> step,
-            std::unique_ptr<Stmt> body) : init(std::move(init)),
-                                          cond(std::move(cond)),
-                                          step(std::move(step)),
-                                          body(std::move(body)) {}
+            std::optional<std::unique_ptr<ForInitOrStep>> step, std::unique_ptr<Stmt> body) :
+    init(std::move(init)),
+    cond(std::move(cond)),
+    step(std::move(step)),
+    body(std::move(body)) {}
     ~ForStmt() override = default;
 };
-
-// /** WhileStmt: optional when grammar supports while. */
-// class WhileStmt : public Stmt {
-// public:
-//     std::unique_ptr<Exp> cond;
-//     std::unique_ptr<Stmt> body;
-
-//     WhileStmt(std::unique_ptr<Exp> cond, std::unique_ptr<Stmt> body) : cond(std::move(cond)), body(std::move(body)) {}
-//     ~WhileStmt() override = default;
-// };
 
 class BreakStmt : public Stmt {
 public:
@@ -407,9 +459,9 @@ public:
     std::string format_string;
     std::vector<std::unique_ptr<Exp>> exp_list;
 
-    PrintfStmt(std::string format_string,
-               std::vector<std::unique_ptr<Exp>> exp_list) : format_string(std::move(format_string)),
-                                                             exp_list(std::move(exp_list)) {}
+    PrintfStmt(std::string format_string, std::vector<std::unique_ptr<Exp>> exp_list) :
+    format_string(std::move(format_string)),
+    exp_list(std::move(exp_list)) {}
     ~PrintfStmt() override = default;
 };
 
@@ -424,11 +476,11 @@ public:
     std::unique_ptr<Block> block;
 
     FuncDef(BType func_type, std::string ident,
-            std::vector<std::unique_ptr<FuncFParam>> func_f_params,
-            std::unique_ptr<Block> block) : func_type(func_type),
-                                            ident(std::move(ident)),
-                                            func_f_params(std::move(func_f_params)),
-                                            block(std::move(block)) {}
+            std::vector<std::unique_ptr<FuncFParam>> func_f_params, std::unique_ptr<Block> block) :
+    func_type(func_type),
+    ident(std::move(ident)),
+    func_f_params(std::move(func_f_params)),
+    block(std::move(block)) {}
     ~FuncDef() override = default;
 };
 
@@ -451,8 +503,9 @@ public:
 
     CompUnit(std::vector<std::unique_ptr<Decl>> decls,
              std::vector<std::unique_ptr<FuncDef>> func_defs,
-             std::unique_ptr<MainFuncDef> main_func_def) : decls(std::move(decls)),
-                                                           func_defs(std::move(func_defs)),
-                                                           main_func_def(std::move(main_func_def)) {}
+             std::unique_ptr<MainFuncDef> main_func_def) :
+    decls(std::move(decls)),
+    func_defs(std::move(func_defs)),
+    main_func_def(std::move(main_func_def)) {}
     ~CompUnit() override = default;
 };

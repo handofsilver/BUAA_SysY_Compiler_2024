@@ -7,101 +7,59 @@
 std::string ToString(TokenType type) {
     switch (type) {
         // Identifier
-        case TokenType::IDENFR:
-            return "IDENFR";
+        case TokenType::IDENFR: return "IDENFR";
 
         // Constant
-        case TokenType::INTCON:
-            return "INTCON";
-        case TokenType::STRCON:
-            return "STRCON";
-        case TokenType::CHRCON:
-            return "CHRCON";
+        case TokenType::INTCON: return "INTCON";
+        case TokenType::STRCON: return "STRCON";
+        case TokenType::CHRCON: return "CHRCON";
 
         // Reserved Word
-        case TokenType::MAINTK:
-            return "MAINTK";
-        case TokenType::CONSTTK:
-            return "CONSTTK";
-        case TokenType::INTTK:
-            return "INTTK";
-        case TokenType::CHARTK:
-            return "CHARTK";
-        case TokenType::BREAKTK:
-            return "BREAKTK";
-        case TokenType::CONTINUETK:
-            return "CONTINUETK";
-        case TokenType::IFTK:
-            return "IFTK";
-        case TokenType::ELSETK:
-            return "ELSETK";
-        case TokenType::VOIDTK:
-            return "VOIDTK";
-        case TokenType::FORTK:
-            return "FORTK";
-        case TokenType::GETINTTK:
-            return "GETINTTK";
-        case TokenType::GETCHARTK:
-            return "GETCHARTK";
-        case TokenType::PRINTFTK:
-            return "PRINTFTK";
-        case TokenType::RETURNTK:
-            return "RETURNTK";
+        case TokenType::MAINTK: return "MAINTK";
+        case TokenType::CONSTTK: return "CONSTTK";
+        case TokenType::INTTK: return "INTTK";
+        case TokenType::CHARTK: return "CHARTK";
+        case TokenType::BREAKTK: return "BREAKTK";
+        case TokenType::CONTINUETK: return "CONTINUETK";
+        case TokenType::IFTK: return "IFTK";
+        case TokenType::ELSETK: return "ELSETK";
+        case TokenType::VOIDTK: return "VOIDTK";
+        case TokenType::FORTK: return "FORTK";
+        case TokenType::GETINTTK: return "GETINTTK";
+        case TokenType::GETCHARTK: return "GETCHARTK";
+        case TokenType::PRINTFTK: return "PRINTFTK";
+        case TokenType::RETURNTK: return "RETURNTK";
 
         // Operator and Punctuator
-        case TokenType::NOT:
-            return "NOT";
-        case TokenType::AND:
-            return "AND";
-        case TokenType::OR:
-            return "OR";
-        case TokenType::MULT:
-            return "MULT";
-        case TokenType::DIV:
-            return "DIV";
-        case TokenType::MOD:
-            return "MOD";
-        case TokenType::LSS:
-            return "LSS";
-        case TokenType::LEQ:
-            return "LEQ";
-        case TokenType::GRE:
-            return "GRE";
-        case TokenType::GEQ:
-            return "GEQ";
-        case TokenType::EQL:
-            return "EQL";
-        case TokenType::NEQ:
-            return "NEQ";
-        case TokenType::PLUS:
-            return "PLUS";
-        case TokenType::MINU:
-            return "MINU";
-        case TokenType::ASSIGN:
-            return "ASSIGN";
-        case TokenType::SEMICN:
-            return "SEMICN";
-        case TokenType::COMMA:
-            return "COMMA";
-        case TokenType::LPARENT:
-            return "LPARENT";
-        case TokenType::RPARENT:
-            return "RPARENT";
-        case TokenType::LBRACK:
-            return "LBRACK";
-        case TokenType::RBRACK:
-            return "RBRACK";
-        case TokenType::LBRACE:
-            return "LBRACE";
-        case TokenType::RBRACE:
-            return "RBRACE";
-        default:
-            return "UNKNOWN";
+        case TokenType::NOT: return "NOT";
+        case TokenType::AND: return "AND";
+        case TokenType::OR: return "OR";
+        case TokenType::MULT: return "MULT";
+        case TokenType::DIV: return "DIV";
+        case TokenType::MOD: return "MOD";
+        case TokenType::LSS: return "LSS";
+        case TokenType::LEQ: return "LEQ";
+        case TokenType::GRE: return "GRE";
+        case TokenType::GEQ: return "GEQ";
+        case TokenType::EQL: return "EQL";
+        case TokenType::NEQ: return "NEQ";
+        case TokenType::PLUS: return "PLUS";
+        case TokenType::MINU: return "MINU";
+        case TokenType::ASSIGN: return "ASSIGN";
+        case TokenType::SEMICN: return "SEMICN";
+        case TokenType::COMMA: return "COMMA";
+        case TokenType::LPARENT: return "LPARENT";
+        case TokenType::RPARENT: return "RPARENT";
+        case TokenType::LBRACK: return "LBRACK";
+        case TokenType::RBRACK: return "RBRACK";
+        case TokenType::LBRACE: return "LBRACE";
+        case TokenType::RBRACE: return "RBRACE";
+        default: return "UNKNOWN";
     }
 }
 
-std::optional<TokenType> GetOperatorType(std::string_view op) {
-    static const std::unordered_map<std::string, TokenType> operator_map = {
+std::optional<TokenType> GetDelimitorType(std::string_view delimitor) {
+    static const std::unordered_map<std::string, TokenType> delimitor_map = {
         {"!",  TokenType::NOT    },
         {"&&", TokenType::AND    },
         {"||", TokenType::OR     },
@@ -126,8 +84,8 @@ std::optional<TokenType> GetOperatorType(std::string_view op) {
         {"{",  TokenType::LBRACE },
         {"}",  TokenType::RBRACE },
     };
-    auto it = operator_map.find(std::string(op));
-    if (it != operator_map.end()) {
+    auto it = delimitor_map.find(std::string(delimitor));
+    if (it != delimitor_map.find(std::string(delimitor))) {
         return it->second;
     }
     return std::nullopt;

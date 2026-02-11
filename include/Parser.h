@@ -5,6 +5,7 @@
 #include "TokenType.h"
 #include <memory>
 #include <ostream>
+#include <stack>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -75,15 +76,20 @@ public:
      * Dispatches to the appropriate Stmt production.
      *
      * Implementation note (ParseStmtOther):
-     * - CurIs(PLUS/MINU/NOT/INTCON/CHRCON/LPARENT) -> expression statement; ParseExp(), ExpectSemicolon().
-     * - CurIs(IDENFR) and LookaheadIs(LPARENT) -> expression (function call); ParseExp(), ExpectSemicolon().
-     * - CurIs(IDENFR) and LookaheadIs(ASSIGN) -> LVal '=' Exp | getint | getchar; ParseLVal(), consume '=', etc.
-     * - CurIs(IDENFR) and other (e.g. LBRACK, so "a[10]" or "a[10]=2"): one-token lookahead cannot distinguish
+     * - CurIs(PLUS/MINU/NOT/INTCON/CHRCON/LPARENT) -> expression statement; ParseExp(),
+     * ExpectSemicolon().
+     * - CurIs(IDENFR) and LookaheadIs(LPARENT) -> expression (function call); ParseExp(),
+     * ExpectSemicolon().
+     * - CurIs(IDENFR) and LookaheadIs(ASSIGN) -> LVal '=' Exp | getint | getchar; ParseLVal(),
+     * consume '=', etc.
+     * - CurIs(IDENFR) and other (e.g. LBRACK, so "a[10]" or "a[10]=2"): one-token lookahead cannot
+     * distinguish
      *   "[Exp] ';'" (e.g. a[10];) from "LVal '=' Exp ';'" (e.g. a[10]=2;). Parse LVal first; then:
      *   - if CurIs(ASSIGN) -> assignment (or getint/getchar);
      *   - if CurIs(SEMICN) -> expression statement (the LVal is the whole expression);
-     *   - else (e.g. PLUS) -> expression starting with that LVal, parse rest of Exp (e.g. ParseAddExpTail or
-     *     re-enter expression layer so that the already-consumed LVal is the first PrimaryExp), then ExpectSemicolon().
+     *   - else (e.g. PLUS) -> expression starting with that LVal, parse rest of Exp (e.g.
+     * ParseAddExpTail or re-enter expression layer so that the already-consumed LVal is the first
+     * PrimaryExp), then ExpectSemicolon().
      */
     std::unique_ptr<Stmt> ParseStmt();
 
@@ -106,7 +112,10 @@ public:
     // Parser output and errors
     // -------------------------------------------------------------------------
     /** Syntax errors collected during parsing: (line_number, error_code). */
-    const std::vector<std::pair<int, std::string>>& GetErrorLog() const;
+    const std::vector<std::pair<int, std::string>>& GetErrorLog() const {
+        return error_log_;
+    }
+
     /** Enable/disable emission of token and syntax lines to parser_out (e.g. parser.txt). */
     void SetParserOutput(std::ostream* out);
     void SetEmitParserOutput(bool enable);
@@ -189,7 +198,7 @@ private:
     /** InitVal → Exp | '{' ... '}' | StringConst. */
     std::unique_ptr<InitVal> ParseInitVal();
     /** ConstExp → AddExp (constant context). */
-    std::unique_ptr<Exp> ParseConstExp();
+    std::unique_ptr<ConstExp> ParseConstExp();
 
     // -------------------------------------------------------------------------
     // Expression layers (all return unique_ptr<Exp> for AST uniformity)
@@ -223,6 +232,36 @@ private:
     /** FuncRParams → Exp { ',' Exp }. */
     std::unique_ptr<FuncRParams> ParseFuncRParams();
 
-    /** ForStmt → LVal '=' Exp (used in for-loop init/step). */
-    std::unique_ptr<Stmt> ParseForStmt();
+    /** ForInitOrStep → LVal '=' Exp (used in for-loop init/step). */
+    std::unique_ptr<ForInitOrStep> ParseForInitOrStep();
+
+    // -------------------------------------------------------------------------
+    // Statements
+    // -------------------------------------------------------------------------
+    /** ForStmt → 'for' '(' [ForInitOrStep] ';' [Cond] ';' [ForInitOrStep] ')' Stmt */
+    std::unique_ptr<ForStmt> ParseForStmt();
+    /** IfStmt → 'if' '(' Cond ')' Stmt [ 'else' Stmt ] */
+    std::unique_ptr<IfStmt> ParseIfStmt();
+    /** BlockStmt → Block */
+    std::unique_ptr<BlockStmt> ParseBlockStmt();
+    /** BreakStmt → 'break' ';' */
+    std::unique_ptr<BreakStmt> ParseBreakStmt();
+    /** ContinueStmt → 'continue' ';' */
+    std::unique_ptr<ContinueStmt> ParseContinueStmt();
+    /** ReturnStmt → 'return' [Exp] ';' */
+    std::unique_ptr<ReturnStmt> ParseReturnStmt();
+    /** PrintfStmt → 'printf''('StringConst {','Exp}')'';' */
+    std::unique_ptr<PrintfStmt> ParsePrintfStmt();
+    /** ExpStmt → [Exp] ';' */
+    /** GetintStmt → LVal '=' 'getint''('')'';' */
+    /** GetcharStmt → LVal '=' 'getchar''('')'';' */
+    /** AssignStmt → LVal '=' Exp ';' */
+    std::unique_ptr<Stmt> ParseOtherStmt();
+
+    // -------------------------------------------------------------------------
+    // Helper functions (TODO: implement in Parser.cpp)
+    // -------------------------------------------------------------------------
+    /** Helper function for constructing an expression from a list of elements and operators. */
+    std::unique_ptr<Exp> ConstructExpFromElements(std::stack<std::unique_ptr<Exp>>& exp_stack,
+                                                  std::stack<OpType>& op_stack);
 };

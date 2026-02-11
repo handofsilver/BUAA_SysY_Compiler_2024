@@ -59,6 +59,5 @@ enum class TokenType {
 // convert the token type to a string for output, e.g. "IDENFR", "INTCON"
 std::string ToString(TokenType type);
 
-std::optional<TokenType> GetOperatorType(std::string_view op);
-
+std::optional<TokenType> GetDelimitorType(std::string_view delimitor);
 std::optional<TokenType> GetReservedWordType(std::string_view word);

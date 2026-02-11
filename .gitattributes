@@ -1,0 +1,67 @@
+###############################################################################
+# 1. 换行符全局设置
+###############################################################################
+# 自动检测文本文件，并将其在 Git 仓库中规范化为 LF
+# 检出到工作区时，根据操作系统自动转换（Windows 为 CRLF，类 Unix 为 LF）
+* text=auto
+
+###############################################################################
+# 2. 强制文本文件 (强制使用 LF)
+# 适用于需要在 Linux 环境运行的代码，无论开发者的 OS 是什么
+###############################################################################
+*.sh            text eol=lf
+*.bash          text eol=lf
+*.py            text eol=lf
+*.js            text eol=lf
+*.jsx           text eol=lf
+*.ts            text eol=lf
+*.tsx           text eol=lf
+*.json          text eol=lf
+*.yml           text eol=yaml
+*.yaml          text eol=lf
+*.md            text eol=lf
+*.dockerfile    text eol=lf
+Dockerfile      text eol=lf
+
+###############################################################################
+# 3. 强制文本文件 (强制使用 CRLF)
+# 仅适用于 Windows 特有的文件
+###############################################################################
+*.bat           text eol=crlf
+*.ps1           text eol=crlf
+*.sln           text eol=crlf
+
+###############################################################################
+# 4. 二进制文件标识
+# 告诉 Git 这些文件不需要进行换行符转换，也不需要尝试合并 diff
+###############################################################################
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.gif           binary
+*.ico           binary
+*.pdf           binary
+*.gz            binary
+*.zip           binary
+*.7z            binary
+*.ttf           binary
+*.woff          binary
+*.woff2         binary
+
+###############################################################################
+# 5. Git LFS (大文件存储) 设置
+# 如果你的项目使用 LFS，请根据需求取消注释
+###############################################################################
+# *.psd filter=lfs diff=lfs merge=lfs -text
+# *.zip filter=lfs diff=lfs merge=lfs -text
+# *.mp4 filter=lfs diff=lfs merge=lfs -text
+
+###############################################################################
+# 6. 导出忽略 (git archive)
+# 当使用 git archive 打包发布版本时，忽略开发辅助文件
+###############################################################################
+.gitattributes  export-ignore
+.gitignore      export-ignore
+.editorconfig   export-ignore
+/tests          export-ignore
+*.log           export-ignore
