@@ -5,7 +5,11 @@
 #include <sstream>
 #include <string_view>
 
-Lexer::Lexer(std::string&& source) : source_(std::move(source)), cur_pos_(0), line_num_(0), cur_token_(std::nullopt) {}
+Lexer::Lexer(std::string&& source) :
+source_(std::move(source)),
+cur_pos_(0),
+line_num_(0),
+cur_token_(std::nullopt) {}
 
 Lexer::Lexer(const char* file_path) : cur_pos_(0), line_num_(0), cur_token_(std::nullopt) {
     std::ifstream f(file_path);
@@ -47,11 +51,11 @@ void Lexer::Next() {
             if (next_ch == '/' || next_ch == '*') {
                 SkipComment();
             } else {
-                GetOperator();
+                GetDelimitor();
                 break;
             }
         } else {
-            GetOperator();
+            GetDelimitor();
             break;
         }
     }
@@ -127,9 +131,9 @@ void Lexer::GetCharConst() {
 void Lexer::GetWord() {
     std::string word;
     word.reserve(64);
-    while (NotEnd() &&
-           (std::isalpha(static_cast<unsigned char>(source_[cur_pos_])) ||
-            std::isdigit(static_cast<unsigned char>(source_[cur_pos_])) || source_[cur_pos_] == '_')) {
+    while (NotEnd() && (std::isalpha(static_cast<unsigned char>(source_[cur_pos_])) ||
+                        std::isdigit(static_cast<unsigned char>(source_[cur_pos_])) ||
+                        source_[cur_pos_] == '_')) {
         word += source_[cur_pos_];
         cur_pos_++;
     }
@@ -151,10 +155,10 @@ void Lexer::GetIntConst() {
     cur_token_ = Token(TokenType::INTCON, static_cast<int>(line_num_ + 1), std::move(int_const));
 }
 
-void Lexer::GetOperator() {
+void Lexer::GetDelimitor() {
     if (cur_pos_ + 1 < source_.size()) {
         std::string_view two(source_.data() + cur_pos_, 2);
-        auto opt = GetOperatorType(two);
+        auto opt = GetDelimitorType(two);
         if (opt) {
             cur_token_ = Token(opt.value(), static_cast<int>(line_num_ + 1), std::string(two));
             cur_pos_ += 2;
@@ -163,7 +167,7 @@ void Lexer::GetOperator() {
     }
     if (NotEnd()) {
         std::string_view one(source_.data() + cur_pos_, 1);
-        auto opt = GetOperatorType(one);
+        auto opt = GetDelimitorType(one);
         if (opt) {
             cur_token_ = Token(opt.value(), static_cast<int>(line_num_ + 1), std::string(one));
             cur_pos_ += 1;

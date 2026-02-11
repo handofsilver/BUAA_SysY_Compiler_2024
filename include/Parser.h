@@ -5,7 +5,6 @@
 #include "TokenType.h"
 #include <memory>
 #include <ostream>
-#include <stack>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -24,7 +23,7 @@
  * driver can merge Lexer::GetErrorLog() and Parser::GetErrorLog() when
  * writing error.txt.
  *
- * Syntax error codes (see docs/2024_SysY_detailed.md "文法符号与错误类型对应"):
+ * Syntax error codes (see docs/2024_SysY_detailed.md for grammar-to-error mapping):
  *   i = missing ';',  j = missing ')',  k = missing ']'.
  *   (a = illegal symbol is lexical.) Defensive branches may use a fallback code.
  *
@@ -40,33 +39,33 @@ public:
     /** Takes a non-owning reference to the lexer. Caller must keep lexer alive. */
     explicit Parser(Lexer& lexer);
 
-    /** Entry point: CompUnit → {Decl} {FuncDef} MainFuncDef. */
+    /** Entry point: CompUnit -> {Decl} {FuncDef} MainFuncDef. */
     std::unique_ptr<CompUnit> ParseCompUnit();
 
     // -------------------------------------------------------------------------
     // Declarations
     // -------------------------------------------------------------------------
-    /** Decl → ConstDecl | VarDecl. */
+    /** Decl -> ConstDecl | VarDecl. */
     std::unique_ptr<Decl> ParseDecl();
-    /** ConstDecl → 'const' BType ConstDef { ',' ConstDef } ';'. */
+    /** ConstDecl -> 'const' BType ConstDef { ',' ConstDef } ';'. */
     std::unique_ptr<ConstDecl> ParseConstDecl();
-    /** VarDecl → BType VarDef { ',' VarDef } ';'. */
+    /** VarDecl -> BType VarDef { ',' VarDef } ';'. */
     std::unique_ptr<VarDecl> ParseVarDecl();
 
     // -------------------------------------------------------------------------
     // Function definitions
     // -------------------------------------------------------------------------
-    /** FuncDef → FuncType Ident '(' [FuncFParams] ')' Block. */
+    /** FuncDef -> FuncType Ident '(' [FuncFParams] ')' Block. */
     std::unique_ptr<FuncDef> ParseFuncDef();
-    /** MainFuncDef → 'int' 'main' '(' ')' Block. */
+    /** MainFuncDef -> 'int' 'main' '(' ')' Block. */
     std::unique_ptr<MainFuncDef> ParseMainFuncDef();
 
     // -------------------------------------------------------------------------
     // Block and block items
     // -------------------------------------------------------------------------
-    /** Block → '{' { BlockItem } '}'. */
+    /** Block -> '{' { BlockItem } '}'. */
     std::unique_ptr<Block> ParseBlock();
-    /** BlockItem → Decl | Stmt. */
+    /** BlockItem -> Decl | Stmt. */
     std::unique_ptr<BlockItem> ParseBlockItem();
 
     // -------------------------------------------------------------------------
@@ -96,14 +95,14 @@ public:
     // -------------------------------------------------------------------------
     // Expressions (public API: Exp and primary layer)
     // -------------------------------------------------------------------------
-    /** Exp → AddExp. Top-level expression. */
+    /** Exp -> AddExp. Top-level expression. */
     std::unique_ptr<Exp> ParseExp();
-    /** Cond → LOrExp. Used in if/for conditions. */
+    /** Cond -> LOrExp. Used in if/for conditions. */
     std::unique_ptr<Exp> ParseCond();
-    /** LVal → Ident ['[' Exp ']']. */
+    /** LVal -> Ident ['[' Exp ']']. */
     std::unique_ptr<LVal> ParseLVal();
     /**
-     * PrimaryExp → '(' Exp ')' | LVal | Number | Character.
+     * PrimaryExp -> '(' Exp ')' | LVal | Number | Character.
      * Lowest precedence; used by UnaryExp.
      */
     std::unique_ptr<Exp> ParsePrimaryExp();
@@ -127,7 +126,7 @@ private:
     bool emit_parser_output_{false};
 
     // -------------------------------------------------------------------------
-    // Token helpers (TODO: implement in Parser.cpp)
+    // Token helpers
     // -------------------------------------------------------------------------
     /** Returns current token if available. */
     const std::optional<Token>& Cur() const {
@@ -156,7 +155,7 @@ private:
     }
 
     /** Record a syntax error (line, code) and optionally synchronize; parsing continues. */
-    void RecordError(int line, std::string code);
+    void RecordError(int line, const std::string& code);
 
     /** Emit current token to parser_out_ if enabled. */
     void EmitToken();
@@ -165,39 +164,46 @@ private:
     void EmitSyntax(std::string_view name);
 
     // -------------------------------------------------------------------------
-    // Expect / consume helpers (TODO: implement; record error if missing)
+    // Expect / consume helpers
     // -------------------------------------------------------------------------
-    /** Expect ';', consume if present, else record error 'i'. */
+    /**
+     * If current token matches \p type, advance and return.
+     * Otherwise: if \p error_code is non-empty, record (line, error_code);
+     * if empty, record generic "?" syntax error. Does not advance on mismatch.
+     */
+    void Expect(TokenType type, const std::string& error_code = "");
+
+    /** Expect ';'; consume if present, else record error 'i'. */
     void ExpectSemicolon();
-    /** Expect ')', consume if present, else record error 'j'. */
+    /** Expect ')'; consume if present, else record error 'j'. */
     void ExpectRightParen();
-    /** Expect ']', consume if present, else record error 'k'. */
+    /** Expect ']'; consume if present, else record error 'k'. */
     void ExpectRightBracket();
 
     // -------------------------------------------------------------------------
     // Type and params
     // -------------------------------------------------------------------------
-    /** BType → 'int' | 'char'. */
+    /** BType -> 'int' | 'char'. */
     BType ParseBType();
-    /** FuncType → 'void' | 'int' | 'char'. */
+    /** FuncType -> 'void' | 'int' | 'char'. */
     BType ParseFuncType();
-    /** FuncFParams → FuncFParam { ',' FuncFParam }. */
+    /** FuncFParams -> FuncFParam { ',' FuncFParam }. */
     std::vector<std::unique_ptr<FuncFParam>> ParseFuncFParams();
-    /** FuncFParam → BType Ident ['[' ']']. */
+    /** FuncFParam -> BType Ident ['[' ']']. */
     std::unique_ptr<FuncFParam> ParseFuncFParam();
 
     // -------------------------------------------------------------------------
     // Def and init values
     // -------------------------------------------------------------------------
-    /** ConstDef → Ident [ '[' ConstExp ']' ] '=' ConstInitVal. */
+    /** ConstDef -> Ident [ '[' ConstExp ']' ] '=' ConstInitVal. */
     std::unique_ptr<ConstDef> ParseConstDef();
-    /** VarDef → Ident [ '[' ConstExp ']' ] [ '=' InitVal ]. */
+    /** VarDef -> Ident [ '[' ConstExp ']' ] [ '=' InitVal ]. */
     std::unique_ptr<VarDef> ParseVarDef();
-    /** ConstInitVal → ConstExp | '{' ... '}' | StringConst. */
+    /** ConstInitVal -> ConstExp | '{' ... '}' | StringConst. */
     std::unique_ptr<ConstInitVal> ParseConstInitVal();
-    /** InitVal → Exp | '{' ... '}' | StringConst. */
+    /** InitVal -> Exp | '{' ... '}' | StringConst. */
     std::unique_ptr<InitVal> ParseInitVal();
-    /** ConstExp → AddExp (constant context). */
+    /** ConstExp -> AddExp (constant context). */
     std::unique_ptr<ConstExp> ParseConstExp();
 
     // -------------------------------------------------------------------------
@@ -206,62 +212,55 @@ private:
     // We keep separate Parse* methods to implement precedence in recursive
     // descent: ParseAddExp calls ParseMulExp and loops on '+'/'-'; ParseMulExp
     // calls ParseUnaryExp and loops on '*'/'/'/'%'; etc. No separate AST
-    // node types for AddExp/MulExp—they become BinaryExp with the right OpType.
+    // node types for AddExp/MulExp; they become BinaryExp with the right OpType.
     // -------------------------------------------------------------------------
-    /** AddExp → MulExp | AddExp ('+' | '−') MulExp. */
+    /** AddExp -> MulExp | AddExp ('+' | '-') MulExp. */
     std::unique_ptr<Exp> ParseAddExp();
-    /** MulExp → UnaryExp | MulExp ('*' | '/' | '%') UnaryExp. */
+    /** MulExp -> UnaryExp | MulExp ('*' | '/' | '%') UnaryExp. */
     std::unique_ptr<Exp> ParseMulExp();
-    /** UnaryExp → PrimaryExp | Ident '(' [FuncRParams] ')' | UnaryOp UnaryExp. */
+    /** UnaryExp -> PrimaryExp | Ident '(' [FuncRParams] ')' | UnaryOp UnaryExp. */
     std::unique_ptr<Exp> ParseUnaryExp();
-    /** RelExp → AddExp | RelExp ('<' | '>' | '<=' | '>=') AddExp. */
+    /** RelExp -> AddExp | RelExp ('<' | '>' | '<=' | '>=') AddExp. */
     std::unique_ptr<Exp> ParseRelExp();
-    /** EqExp → RelExp | EqExp ('==' | '!=') RelExp. */
+    /** EqExp -> RelExp | EqExp ('==' | '!=') RelExp. */
     std::unique_ptr<Exp> ParseEqExp();
-    /** LAndExp → EqExp | LAndExp '&&' EqExp. */
+    /** LAndExp -> EqExp | LAndExp '&&' EqExp. */
     std::unique_ptr<Exp> ParseLAndExp();
-    /** LOrExp → LAndExp | LOrExp '||' LAndExp. */
+    /** LOrExp -> LAndExp | LOrExp '||' LAndExp. */
     std::unique_ptr<Exp> ParseLOrExp();
 
-    /** Number → IntConst. Returns Number (Exp). */
+    /** Number -> IntConst. Returns Number (Exp). */
     std::unique_ptr<Exp> ParseNumber();
-    /** Character → CharConst. Returns Character (Exp). */
+    /** Character -> CharConst. Returns Character (Exp). */
     std::unique_ptr<Exp> ParseCharacter();
-    /** UnaryOp → '+' | '−' | '!'. Consumes token and returns OpType. */
+    /** UnaryOp -> '+' | '-' | '!'. Consumes token and returns OpType. */
     OpType ParseUnaryOp();
-    /** FuncRParams → Exp { ',' Exp }. */
+    /** FuncRParams -> Exp { ',' Exp }. */
     std::unique_ptr<FuncRParams> ParseFuncRParams();
 
-    /** ForInitOrStep → LVal '=' Exp (used in for-loop init/step). */
+    /** ForInitOrStep -> LVal '=' Exp (used in for-loop init/step). */
     std::unique_ptr<ForInitOrStep> ParseForInitOrStep();
 
     // -------------------------------------------------------------------------
     // Statements
     // -------------------------------------------------------------------------
-    /** ForStmt → 'for' '(' [ForInitOrStep] ';' [Cond] ';' [ForInitOrStep] ')' Stmt */
+    /** ForStmt -> 'for' '(' [ForInitOrStep] ';' [Cond] ';' [ForInitOrStep] ')' Stmt */
     std::unique_ptr<ForStmt> ParseForStmt();
-    /** IfStmt → 'if' '(' Cond ')' Stmt [ 'else' Stmt ] */
+    /** IfStmt -> 'if' '(' Cond ')' Stmt [ 'else' Stmt ] */
     std::unique_ptr<IfStmt> ParseIfStmt();
-    /** BlockStmt → Block */
+    /** BlockStmt -> Block */
     std::unique_ptr<BlockStmt> ParseBlockStmt();
-    /** BreakStmt → 'break' ';' */
+    /** BreakStmt -> 'break' ';' */
     std::unique_ptr<BreakStmt> ParseBreakStmt();
-    /** ContinueStmt → 'continue' ';' */
+    /** ContinueStmt -> 'continue' ';' */
     std::unique_ptr<ContinueStmt> ParseContinueStmt();
-    /** ReturnStmt → 'return' [Exp] ';' */
+    /** ReturnStmt -> 'return' [Exp] ';' */
     std::unique_ptr<ReturnStmt> ParseReturnStmt();
-    /** PrintfStmt → 'printf''('StringConst {','Exp}')'';' */
+    /** PrintfStmt -> 'printf''('StringConst {','Exp}')'';' */
     std::unique_ptr<PrintfStmt> ParsePrintfStmt();
-    /** ExpStmt → [Exp] ';' */
-    /** GetintStmt → LVal '=' 'getint''('')'';' */
-    /** GetcharStmt → LVal '=' 'getchar''('')'';' */
-    /** AssignStmt → LVal '=' Exp ';' */
+    /** ExpStmt -> [Exp] ';' */
+    /** GetintStmt -> LVal '=' 'getint''('')'';' */
+    /** GetcharStmt -> LVal '=' 'getchar''('')'';' */
+    /** AssignStmt -> LVal '=' Exp ';' */
     std::unique_ptr<Stmt> ParseOtherStmt();
-
-    // -------------------------------------------------------------------------
-    // Helper functions (TODO: implement in Parser.cpp)
-    // -------------------------------------------------------------------------
-    /** Helper function for constructing an expression from a list of elements and operators. */
-    std::unique_ptr<Exp> ConstructExpFromElements(std::stack<std::unique_ptr<Exp>>& exp_stack,
-                                                  std::stack<OpType>& op_stack);
 };

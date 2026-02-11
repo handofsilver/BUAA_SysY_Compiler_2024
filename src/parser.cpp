@@ -4,7 +4,71 @@
 
 Parser::Parser(Lexer& lexer) : lexer_(lexer) {}
 
-/** Entry point: CompUnit → {Decl} {FuncDef} MainFuncDef. */
+// -------------------------------------------------------------------------
+// Expect and error recording
+// -------------------------------------------------------------------------
+
+void Parser::RecordError(int line, const std::string& code) {
+    error_log_.push_back(std::make_pair(line, std::move(code)));
+}
+
+void Parser::Expect(TokenType type, const std::string& error_code) {
+    if (CurIs(type)) {
+        Advance();
+        return;
+    }
+    if (Cur().has_value()) {
+        if (error_code.empty()) {
+            RecordError(Cur()->line_num, "?");
+        } else {
+            RecordError(Cur()->line_num, error_code);
+        }
+    }
+}
+
+void Parser::ExpectSemicolon() {
+    Expect(TokenType::SEMICN, "i");
+}
+
+void Parser::ExpectRightParen() {
+    Expect(TokenType::RPARENT, "j");
+}
+
+void Parser::ExpectRightBracket() {
+    Expect(TokenType::RBRACK, "k");
+}
+
+// -------------------------------------------------------------------------
+// Token helpers
+// -------------------------------------------------------------------------
+
+bool Parser::LookaheadIs(TokenType t) {
+    std::optional<Token> next = lexer_.PeekNext();
+    return next.has_value() && next->type == t;
+}
+
+bool Parser::Lookahead2Is(TokenType t) {
+    std::optional<Token> next2 = lexer_.PeekNext2();
+    return next2.has_value() && next2->type == t;
+}
+
+void Parser::EmitToken() {
+    if (emit_parser_output_) {
+        *parser_out_ << Cur()->value << std::endl;
+    }
+}
+
+void Parser::EmitSyntax(std::string_view name) {
+    if (emit_parser_output_) {
+        *parser_out_ << name << std::endl;
+    }
+}
+
+// -------------------------------------------------------------------------
+// CompUnit
+// -------------------------------------------------------------------------
+
+/** Entry point: CompUnit -> {Decl} {FuncDef} MainFuncDef. */
 std::unique_ptr<CompUnit> Parser::ParseCompUnit() {
     std::vector<std::unique_ptr<Decl>> decls;
     std::vector<std::unique_ptr<FuncDef>> func_defs;
@@ -30,19 +94,22 @@ std::unique_ptr<CompUnit> Parser::ParseCompUnit() {
 // -------------------------------------------------------------------------
 // Declarations
 // -------------------------------------------------------------------------
-/** Decl → ConstDecl | VarDecl. */
+
+/** Decl -> ConstDecl | VarDecl. */
 std::unique_ptr<Decl> Parser::ParseDecl() {
     if (CurIs(TokenType::CONSTTK)) {
         return ParseConstDecl();
-    } else if (CurIs(TokenType::INTTK) || CurIs(TokenType::CHARTK)) {
-        return ParseVarDecl();
-    } else {
-        RecordError(Cur()->line_num, "?");
-        return nullptr;
     }
+    if (CurIs(TokenType::INTTK) || CurIs(TokenType::CHARTK)) {
+        return ParseVarDecl();
+    }
+    if (Cur().has_value()) {
+        RecordError(Cur()->line_num, "?");
+    }
+    return nullptr;
 }
 
-/** ConstDecl → 'const' BType ConstDef { ',' ConstDef } ';'. */
+/** ConstDecl -> 'const' BType ConstDef { ',' ConstDef } ';'. */
 std::unique_ptr<ConstDecl> Parser::ParseConstDecl() {
     Advance();
     BType b_type = ParseBType();
@@ -53,10 +120,10 @@ std::unique_ptr<ConstDecl> Parser::ParseConstDecl() {
         const_defs.push_back(ParseConstDef());
     }
     ExpectSemicolon();
-    return std::make_unique<ConstDecl>(b_type, const_defs);
+    return std::make_unique<ConstDecl>(b_type, std::move(const_defs));
 }
 
-/** VarDecl → BType VarDef { ',' VarDef } ';'. */
+/** VarDecl -> BType VarDef { ',' VarDef } ';'. */
 std::unique_ptr<VarDecl> Parser::ParseVarDecl() {
     BType b_type = ParseBType();
     std::vector<std::unique_ptr<VarDef>> var_defs;
@@ -66,31 +133,188 @@ std::unique_ptr<VarDecl> Parser::ParseVarDecl() {
         var_defs.push_back(ParseVarDef());
     }
     ExpectSemicolon();
-    return std::make_unique<VarDecl>(b_type, var_defs);
+    return std::make_unique<VarDecl>(b_type, std::move(var_defs));
+}
+
+// -------------------------------------------------------------------------
+// Def and init values
+// -------------------------------------------------------------------------
+
+/** ConstDef -> Ident [ '[' ConstExp ']' ] '=' ConstInitVal. */
+std::unique_ptr<ConstDef> Parser::ParseConstDef() {
+    std::string ident = Cur()->value;
+    Expect(TokenType::IDENFR, "?");
+    std::vector<std::unique_ptr<ConstExp>> dims;
+    if (CurIs(TokenType::LBRACK)) {
+        Advance();
+        dims.push_back(ParseConstExp());
+        ExpectRightBracket();
+    }
+    Expect(TokenType::ASSIGN, "?");
+    std::unique_ptr<ConstInitVal> const_init_val = ParseConstInitVal();
+    return std::make_unique<ConstDef>(std::move(ident), std::move(dims), std::move(const_init_val));
+}
+
+/** VarDef -> Ident [ '[' ConstExp ']' ] [ '=' InitVal ]. */
+std::unique_ptr<VarDef> Parser::ParseVarDef() {
+    std::string ident = Cur()->value;
+    Expect(TokenType::IDENFR, "?");
+    std::vector<std::unique_ptr<ConstExp>> dims;
+    if (CurIs(TokenType::LBRACK)) {
+        Advance();
+        dims.push_back(ParseConstExp());
+        ExpectRightBracket();
+    }
+    std::unique_ptr<InitVal> init_val;
+    if (CurIs(TokenType::ASSIGN)) {
+        Advance();
+        init_val = ParseInitVal();
+    }
+    return std::make_unique<VarDef>(std::move(ident), std::move(dims), std::move(init_val));
+}
+
+/** ConstInitVal -> ConstExp | '{' [ ConstExp { ',' ConstExp } ] '}' | StringConst. */
+std::unique_ptr<ConstInitVal> Parser::ParseConstInitVal() {
+    if (CurIs(TokenType::STRCON)) {
+        std::string s = Cur()->value;
+        Advance();
+        return std::make_unique<ConstInitVal>(std::move(s));
+    }
+    if (CurIs(TokenType::LBRACE)) {
+        Advance();
+        std::vector<std::unique_ptr<ConstExp>> list;
+        if (!CurIs(TokenType::RBRACE)) {
+            list.push_back(ParseConstExp());
+            while (CurIs(TokenType::COMMA)) {
+                Advance();
+                list.push_back(ParseConstExp());
+            }
+        }
+        Expect(TokenType::RBRACE, "?");
+        return std::make_unique<ConstInitVal>(std::move(list));
+    }
+    return std::make_unique<ConstInitVal>(ParseConstExp());
+}
+
+/** InitVal -> Exp | '{' [ Exp { ',' Exp } ] '}' | StringConst. */
+std::unique_ptr<InitVal> Parser::ParseInitVal() {
+    if (CurIs(TokenType::STRCON)) {
+        std::string s = Cur()->value;
+        Advance();
+        return std::make_unique<InitVal>(std::move(s));
+    }
+    if (CurIs(TokenType::LBRACE)) {
+        Advance();
+        std::vector<std::unique_ptr<Exp>> list;
+        if (!CurIs(TokenType::RBRACE)) {
+            list.push_back(ParseExp());
+            while (CurIs(TokenType::COMMA)) {
+                Advance();
+                list.push_back(ParseExp());
+            }
+        }
+        Expect(TokenType::RBRACE, "?");
+        return std::make_unique<InitVal>(std::move(list));
+    }
+    return std::make_unique<InitVal>(ParseExp());
+}
+
+/** ConstExp -> AddExp (constant context). */
+std::unique_ptr<ConstExp> Parser::ParseConstExp() {
+    return std::make_unique<ConstExp>(ParseAddExp());
+}
+
+// -------------------------------------------------------------------------
+// Type and params
+// -------------------------------------------------------------------------
+
+/** BType -> 'int' | 'char'. */
+BType Parser::ParseBType() {
+    if (CurIs(TokenType::INTTK)) {
+        Advance();
+        return BType::INT;
+    }
+    if (CurIs(TokenType::CHARTK)) {
+        Advance();
+        return BType::CHAR;
+    }
+    if (Cur().has_value()) {
+        RecordError(Cur()->line_num, "?");
+    }
+    return BType::INT;
+}
+
+/** FuncType -> 'void' | 'int' | 'char'. */
+BType Parser::ParseFuncType() {
+    if (CurIs(TokenType::VOIDTK)) {
+        Advance();
+        return BType::VOID;
+    }
+    if (CurIs(TokenType::INTTK)) {
+        Advance();
+        return BType::INT;
+    }
+    if (CurIs(TokenType::CHARTK)) {
+        Advance();
+        return BType::CHAR;
+    }
+    if (Cur().has_value()) {
+        RecordError(Cur()->line_num, "?");
+    }
+    return BType::INT;
+}
+
+/** FuncFParams -> FuncFParam { ',' FuncFParam }. */
+std::vector<std::unique_ptr<FuncFParam>> Parser::ParseFuncFParams() {
+    std::vector<std::unique_ptr<FuncFParam>> params;
+    if (CurIs(TokenType::RPARENT)) {
+        return params;
+    }
+    params.push_back(ParseFuncFParam());
+    while (CurIs(TokenType::COMMA)) {
+        Advance();
+        params.push_back(ParseFuncFParam());
+    }
+    return params;
+}
+
+/** FuncFParam -> BType Ident ['[' ']']. */
+std::unique_ptr<FuncFParam> Parser::ParseFuncFParam() {
+    BType btype = ParseBType();
+    std::string ident = Cur()->value;
+    Expect(TokenType::IDENFR, "?");
+    bool is_array = false;
+    if (CurIs(TokenType::LBRACK)) {
+        Advance();
+        Expect(TokenType::RBRACK, "k");
+        is_array = true;
+    }
+    return std::make_unique<FuncFParam>(btype, std::move(ident), is_array);
 }
 
 // -------------------------------------------------------------------------
 // Function definitions
 // -------------------------------------------------------------------------
-/** FuncDef → FuncType Ident '(' [FuncFParams] ')' Block. */
+
+/** FuncDef -> FuncType Ident '(' [FuncFParams] ')' Block. */
 std::unique_ptr<FuncDef> Parser::ParseFuncDef() {
     BType b_type = ParseFuncType();
     std::string ident = Cur()->value;
-    Advance();
-    Advance();
+    Expect(TokenType::IDENFR, "?");
+    Expect(TokenType::LPARENT, "j");
     std::vector<std::unique_ptr<FuncFParam>> func_f_params = ParseFuncFParams();
     ExpectRightParen();
     std::unique_ptr<Block> block = ParseBlock();
-    return std::make_unique<FuncDef>(b_type, ident, std::move(func_f_params), std::move(block));
+    return std::make_unique<FuncDef>(b_type, std::move(ident), std::move(func_f_params),
+                                     std::move(block));
 }
 
-/** MainFuncDef → 'int' 'main' '(' ')' Block. */
+/** MainFuncDef -> 'int' 'main' '(' ')' Block. */
 std::unique_ptr<MainFuncDef> Parser::ParseMainFuncDef() {
-    Advance();
-    Advance();
-    Advance();
+    Expect(TokenType::INTTK, "j");
+    Expect(TokenType::MAINTK, "j");
+    Expect(TokenType::LPARENT, "j");
     ExpectRightParen();
-
     std::unique_ptr<Block> block = ParseBlock();
     return std::make_unique<MainFuncDef>(std::move(block));
 }
@@ -98,130 +322,141 @@ std::unique_ptr<MainFuncDef> Parser::ParseMainFuncDef() {
 // -------------------------------------------------------------------------
 // Block and block items
 // -------------------------------------------------------------------------
-/** Block → '{' { BlockItem } '}'. */
+
+/** Block -> '{' { BlockItem } '}'. */
 std::unique_ptr<Block> Parser::ParseBlock() {
-    Advance();
+    Expect(TokenType::LBRACE, "?");
     std::vector<std::unique_ptr<BlockItem>> block_items;
     while (!CurIs(TokenType::RBRACE)) {
         block_items.push_back(ParseBlockItem());
     }
-    Advance();
+    Expect(TokenType::RBRACE, "?");
     return std::make_unique<Block>(std::move(block_items));
 }
 
-/** BlockItem → Decl | Stmt. */
+/** BlockItem -> Decl | Stmt. */
 std::unique_ptr<BlockItem> Parser::ParseBlockItem() {
     if (CurIs(TokenType::CONSTTK) || CurIs(TokenType::INTTK) || CurIs(TokenType::CHARTK)) {
         return ParseDecl();
-    } else {
-        return ParseStmt();
     }
+    return ParseStmt();
 }
 
 // -------------------------------------------------------------------------
 // Statements
 // -------------------------------------------------------------------------
+
 /** Dispatches to the appropriate Stmt production. */
 std::unique_ptr<Stmt> Parser::ParseStmt() {
     if (CurIs(TokenType::LBRACE)) {
         return ParseBlockStmt();
-    } else if (CurIs(TokenType::IFTK)) {
-        return ParseIfStmt();
-    } else if (CurIs(TokenType::FORTK)) {
-        return ParseForStmt();
-    } else if (CurIs(TokenType::BREAKTK)) {
-        return ParseBreakStmt();
-    } else if (CurIs(TokenType::CONTINUETK)) {
-        return ParseContinueStmt();
-    } else if (CurIs(TokenType::RETURNTK)) {
-        return ParseReturnStmt();
-    } else if (CurIs(TokenType::PRINTFTK)) {
-        return ParsePrintfStmt();
-    } else {
-        return ParseOtherStmt();
     }
+    if (CurIs(TokenType::IFTK)) {
+        return ParseIfStmt();
+    }
+    if (CurIs(TokenType::FORTK)) {
+        return ParseForStmt();
+    }
+    if (CurIs(TokenType::BREAKTK)) {
+        return ParseBreakStmt();
+    }
+    if (CurIs(TokenType::CONTINUETK)) {
+        return ParseContinueStmt();
+    }
+    if (CurIs(TokenType::RETURNTK)) {
+        return ParseReturnStmt();
+    }
+    if (CurIs(TokenType::PRINTFTK)) {
+        return ParsePrintfStmt();
+    }
+    return ParseOtherStmt();
 }
 
-/** ForInitOrStep → LVal '=' Exp (used in for-loop init/step). */
+/** ForInitOrStep -> LVal '=' Exp (used in for-loop init/step). */
 std::unique_ptr<ForInitOrStep> Parser::ParseForInitOrStep() {
     std::unique_ptr<LVal> lval = ParseLVal();
-    Advance();
+    Expect(TokenType::ASSIGN, "?");
     std::unique_ptr<Exp> exp = ParseExp();
     return std::make_unique<ForInitOrStep>(std::move(lval), std::move(exp));
 }
 
-/** BlockStmt → Block */
+/** BlockStmt -> Block */
 std::unique_ptr<BlockStmt> Parser::ParseBlockStmt() {
     return std::make_unique<BlockStmt>(ParseBlock());
 }
 
-/** IfStmt → 'if' '(' Cond ')' Stmt [ 'else' Stmt ] */
+/** IfStmt -> 'if' '(' Cond ')' Stmt [ 'else' Stmt ] */
 std::unique_ptr<IfStmt> Parser::ParseIfStmt() {
     Advance();
-    Advance();
+    Expect(TokenType::LPARENT, "j");
     std::unique_ptr<Exp> cond = ParseCond();
     ExpectRightParen();
     std::unique_ptr<Stmt> then_stmt = ParseStmt();
-
     if (CurIs(TokenType::ELSETK)) {
         Advance();
         std::unique_ptr<Stmt> else_stmt = ParseStmt();
         return std::make_unique<IfStmt>(std::move(cond), std::move(then_stmt),
                                         std::make_optional(std::move(else_stmt)));
-    } else {
-        return std::make_unique<IfStmt>(std::move(cond), std::move(then_stmt), std::nullopt);
     }
+    return std::make_unique<IfStmt>(std::move(cond), std::move(then_stmt), std::nullopt);
 }
 
-/** ForStmt → 'for' '(' [ForInit] ';' [Cond] ';' [ForStep] ')' Stmt */
+/** ForStmt -> 'for' '(' [ForInitOrStep] ';' [Cond] ';' [ForInitOrStep] ')' Stmt */
 std::unique_ptr<ForStmt> Parser::ParseForStmt() {
     Advance();
-    Advance();
-    std::optional<std::unique_ptr<ForInitOrStep>> init = ParseForInitOrStep();
+    Expect(TokenType::LPARENT, "j");
+    std::optional<std::unique_ptr<ForInitOrStep>> init;
+    if (!CurIs(TokenType::SEMICN)) {
+        init = ParseForInitOrStep();
+    }
     ExpectSemicolon();
-    std::optional<std::unique_ptr<Exp>> cond = ParseCond();
+    std::optional<std::unique_ptr<Exp>> cond;
+    if (!CurIs(TokenType::SEMICN)) {
+        cond = ParseCond();
+    }
     ExpectSemicolon();
-    std::optional<std::unique_ptr<ForInitOrStep>> step = ParseForInitOrStep();
+    std::optional<std::unique_ptr<ForInitOrStep>> step;
+    if (!CurIs(TokenType::RPARENT)) {
+        step = ParseForInitOrStep();
+    }
     ExpectRightParen();
     std::unique_ptr<Stmt> body = ParseStmt();
     return std::make_unique<ForStmt>(std::move(init), std::move(cond), std::move(step),
                                      std::move(body));
 }
 
-/** BreakStmt → 'break' ';' */
+/** BreakStmt -> 'break' ';' */
 std::unique_ptr<BreakStmt> Parser::ParseBreakStmt() {
     Advance();
     ExpectSemicolon();
     return std::make_unique<BreakStmt>();
 }
 
-/** ContinueStmt → 'continue' ';' */
+/** ContinueStmt -> 'continue' ';' */
 std::unique_ptr<ContinueStmt> Parser::ParseContinueStmt() {
     Advance();
     ExpectSemicolon();
     return std::make_unique<ContinueStmt>();
 }
 
-/** ReturnStmt → 'return' [Exp] ';' */
+/** ReturnStmt -> 'return' [Exp] ';' */
 std::unique_ptr<ReturnStmt> Parser::ParseReturnStmt() {
     Advance();
     if (CurIs(TokenType::SEMICN)) {
         Advance();
         return std::make_unique<ReturnStmt>(std::nullopt);
-    } else {
-        std::unique_ptr<Exp> exp = ParseExp();
-        ExpectSemicolon();
-        return std::make_unique<ReturnStmt>(std::move(exp));
     }
+    std::unique_ptr<Exp> exp = ParseExp();
+    ExpectSemicolon();
+    return std::make_unique<ReturnStmt>(std::move(exp));
 }
 
-/** PrintfStmt → 'printf''('StringConst {','Exp}')'';' */
+/** PrintfStmt -> 'printf' '(' StringConst { ',' Exp } ')' ';' */
 std::unique_ptr<PrintfStmt> Parser::ParsePrintfStmt() {
     Advance();
-    Advance();
+    Expect(TokenType::LPARENT, "j");
     std::string format_string = Cur()->value;
-    Advance();
-
+    Expect(TokenType::STRCON, "?");
     std::vector<std::unique_ptr<Exp>> exps;
     while (CurIs(TokenType::COMMA)) {
         Advance();
@@ -229,13 +464,10 @@ std::unique_ptr<PrintfStmt> Parser::ParsePrintfStmt() {
     }
     ExpectRightParen();
     ExpectSemicolon();
-    return std::make_unique<PrintfStmt>(format_string, std::move(exps));
+    return std::make_unique<PrintfStmt>(std::move(format_string), std::move(exps));
 }
 
-/** ExpStmt → [Exp] ';' */
-/** GetintStmt → LVal '=' 'getint''('')'';' */
-/** GetcharStmt → LVal '=' 'getchar''('')'';' */
-/** AssignStmt → LVal '=' Exp ';' */
+/** ExpStmt -> [Exp] ';'. GetintStmt / GetcharStmt / AssignStmt via LVal '=' ... */
 std::unique_ptr<Stmt> Parser::ParseOtherStmt() {
     if (CurIs(TokenType::SEMICN)) {
         Advance();
@@ -247,54 +479,50 @@ std::unique_ptr<Stmt> Parser::ParseOtherStmt() {
         Advance();
         if (CurIs(TokenType::GETINTTK)) {
             Advance();
-            Advance();
+            Expect(TokenType::LPARENT, "j");
             ExpectRightParen();
             ExpectSemicolon();
             return std::make_unique<GetintStmt>(std::move(lval));
-        } else if (CurIs(TokenType::GETCHARTK)) {
+        }
+        if (CurIs(TokenType::GETCHARTK)) {
             Advance();
-            Advance();
+            Expect(TokenType::LPARENT, "j");
             ExpectRightParen();
             ExpectSemicolon();
             return std::make_unique<GetcharStmt>(std::move(lval));
-        } else {
-            std::unique_ptr<Exp> exp = ParseExp();
-            ExpectSemicolon();
-            return std::make_unique<AssignStmt>(std::move(lval), std::move(exp));
         }
-    } else {
-        // parsing rest of the expression
-        if (CurIs(TokenType::SEMICN)) {
-            Advance();
-            return std::make_unique<ExpStmt>(std::nullopt);
-        } else {
-            OpType op = GetOperatorType(Cur()->value);
-            Advance();
-            std::unique_ptr<Exp> exp = ParseExp();
-            ExpectSemicolon();
-
-            std::unique_ptr<BinaryExp> binary_exp =
-                std::make_unique<BinaryExp>(std::move(lval), std::move(exp), op);
-
-            return std::make_unique<ExpStmt>(std::make_optional(std::move(binary_exp)));
-        }
+        std::unique_ptr<Exp> exp = ParseExp();
+        ExpectSemicolon();
+        return std::make_unique<AssignStmt>(std::move(lval), std::move(exp));
     }
+
+    if (CurIs(TokenType::SEMICN)) {
+        Advance();
+        return std::make_unique<ExpStmt>(std::nullopt);
+    }
+    OpType op = GetOperatorType(Cur()->value);
+    Advance();
+    std::unique_ptr<Exp> exp = ParseExp();
+    ExpectSemicolon();
+    return std::make_unique<ExpStmt>(
+        std::make_optional(std::make_unique<BinaryExp>(std::move(lval), std::move(exp), op)));
 }
 
 // -------------------------------------------------------------------------
-// Expressions (public API: Exp and primary layer)
+// Expressions (public API and primary layer)
 // -------------------------------------------------------------------------
-/** Exp → AddExp. Top-level expression. */
+
+/** Exp -> AddExp. Top-level expression. */
 std::unique_ptr<Exp> Parser::ParseExp() {
     return ParseAddExp();
 }
 
-/** Cond → LOrExp. Used in if/for conditions. */
+/** Cond -> LOrExp. Used in if/for conditions. */
 std::unique_ptr<Exp> Parser::ParseCond() {
     return ParseLOrExp();
 }
 
-/** LVal → Ident ['[' Exp ']']. */
+/** LVal -> Ident ['[' Exp ']']. */
 std::unique_ptr<LVal> Parser::ParseLVal() {
     std::string ident = Cur()->value;
     Advance();
@@ -302,206 +530,63 @@ std::unique_ptr<LVal> Parser::ParseLVal() {
         Advance();
         std::unique_ptr<Exp> exp = ParseExp();
         ExpectRightBracket();
-        return std::make_unique<LVal>(ident, std::move(exp));
-    } else {
-        return std::make_unique<LVal>(ident);
+        return std::make_unique<LVal>(std::move(ident), std::move(exp));
     }
+    return std::make_unique<LVal>(std::move(ident));
 }
 
-/** PrimaryExp → '(' Exp ')' | LVal | Number | Character. */
+/** PrimaryExp -> '(' Exp ')' | LVal | Number | Character. */
 std::unique_ptr<Exp> Parser::ParsePrimaryExp() {
     if (CurIs(TokenType::INTCON)) {
         return ParseNumber();
-    } else if (CurIs(TokenType::CHRCON)) {
+    }
+    if (CurIs(TokenType::CHRCON)) {
         return ParseCharacter();
-    } else if (CurIs(TokenType::LPARENT)) {
+    }
+    if (CurIs(TokenType::LPARENT)) {
         Advance();
         std::unique_ptr<Exp> exp = ParseExp();
         ExpectRightParen();
         return exp;
-    } else if (CurIs(TokenType::IDENFR)) {
+    }
+    if (CurIs(TokenType::IDENFR)) {
         return ParseLVal();
-    } else {
+    }
+    if (Cur().has_value()) {
         RecordError(Cur()->line_num, "?");
-        return nullptr;
     }
-}
-
-/** Enable/disable emission of token and syntax lines to parser_out (e.g. parser.txt). */
-void SetParserOutput(std::ostream* out);
-void SetEmitParserOutput(bool enable);
-
-// -------------------------------------------------------------------------
-// Token helpers
-// -------------------------------------------------------------------------
-
-/** Record a syntax error (line, code) and optionally synchronize; parsing continues. */
-void Parser::RecordError(int line, std::string code) {
-    error_log_.push_back(std::make_pair(line, code));
-}
-
-bool Parser::LookaheadIs(TokenType t) {
-    std::optional<Token> next = lexer_.PeekNext();
-    return next.has_value() && next->type == t;
-}
-
-bool Parser::Lookahead2Is(TokenType t) {
-    std::optional<Token> next2 = lexer_.PeekNext2();
-    return next2.has_value() && next2->type == t;
-}
-
-/** Emit current token to parser_out_ if enabled. */
-void Parser::EmitToken() {
-    if (emit_parser_output_) {
-        *parser_out_ << Cur()->value << std::endl;
-    }
-}
-
-/** Emit a syntax component name like "<CompUnit>" if enabled. */
-void Parser::EmitSyntax(std::string_view name) {
-    if (emit_parser_output_) {
-        *parser_out_ << name << std::endl;
-    }
+    return nullptr;
 }
 
 // -------------------------------------------------------------------------
-// Expect / consume helpers (TODO: implement; record error if missing)
+// Expression layers (iterative left-associative wrapping)
 // -------------------------------------------------------------------------
-/** Expect ';', consume if present, else record error 'i'. */
-void Parser::ExpectSemicolon() {
-    if (CurIs(TokenType::SEMICN)) {
-        Advance();
-    } else {
-        RecordError(Cur()->line_num, "i");
-    }
-}
 
-/** Expect ')', consume if present, else record error 'j'. */
-void Parser::ExpectRightParen() {
-    if (CurIs(TokenType::RPARENT)) {
-        Advance();
-    } else {
-        RecordError(Cur()->line_num, "j");
-    }
-}
-
-/** Expect ']', consume if present, else record error 'k'. */
-void Parser::ExpectRightBracket() {
-    if (CurIs(TokenType::RBRACK)) {
-        Advance();
-    } else {
-        RecordError(Cur()->line_num, "k");
-    }
-}
-
-// -------------------------------------------------------------------------
-// Type and params
-// -------------------------------------------------------------------------
-/** BType → 'int' | 'char'. */
-BType Parser::ParseBType() {
-    if (CurIs(TokenType::INTTK)) {
-        Advance();
-        return BType::INT;
-    } else if (CurIs(TokenType::CHARTK)) {
-        Advance();
-        return BType::CHAR;
-    }
-}
-
-/** FuncType → 'void' | 'int' | 'char'. */
-BType Parser::ParseFuncType() {
-    if (CurIs(TokenType::VOIDTK)) {
-        Advance();
-        return BType::VOID;
-    } else if (CurIs(TokenType::INTTK)) {
-        Advance();
-        return BType::INT;
-    } else if (CurIs(TokenType::CHARTK)) {
-        Advance();
-        return BType::CHAR;
-    }
-}
-
-/** FuncFParams → FuncFParam { ',' FuncFParam }. */
-std::vector<std::unique_ptr<FuncFParam>> ParseFuncFParams();
-/** FuncFParam → BType Ident ['[' ']']. */
-std::unique_ptr<FuncFParam> ParseFuncFParam();
-
-// -------------------------------------------------------------------------
-// Def and init values
-// -------------------------------------------------------------------------
-/** ConstDef → Ident [ '[' ConstExp ']' ] '=' ConstInitVal. */
-std::unique_ptr<ConstDef> ParseConstDef();
-/** VarDef → Ident [ '[' ConstExp ']' ] [ '=' InitVal ]. */
-std::unique_ptr<VarDef> ParseVarDef();
-/** ConstInitVal → ConstExp | '{' ... '}' | StringConst. */
-std::unique_ptr<ConstInitVal> ParseConstInitVal();
-/** InitVal → Exp | '{' ... '}' | StringConst. */
-std::unique_ptr<InitVal> ParseInitVal();
-/** ConstExp → AddExp (constant context). */
-std::unique_ptr<ConstExp> Parser::ParseConstExp() {
-    return std::make_unique<ConstExp>(ParseAddExp());
-}
-
-// -------------------------------------------------------------------------
-// Expression layers (all return unique_ptr<Exp> for AST uniformity)
-// Grammar has separate non-terminals (AddExp, MulExp, ...) for precedence.
-// We keep separate Parse* methods to implement precedence in recursive
-// descent: ParseAddExp calls ParseMulExp and loops on '+'/'-'; ParseMulExp
-// calls ParseUnaryExp and loops on '*'/'/'/'%'; etc. No separate AST
-// node types for AddExp/MulExp—they become BinaryExp with the right OpType.
-// -------------------------------------------------------------------------
-/** AddExp → MulExp | AddExp ('+' | '−') MulExp. */
+/** AddExp -> MulExp | AddExp ('+' | '-') MulExp. */
 std::unique_ptr<Exp> Parser::ParseAddExp() {
-    std::stack<std::unique_ptr<Exp>> exp_stack;
-    std::stack<OpType> op_stack;
-    exp_stack.push(ParseMulExp());
-
+    auto lhs = ParseMulExp();
     while (CurIs(TokenType::PLUS) || CurIs(TokenType::MINU)) {
-        OpType op_type = GetOperatorType(Cur()->value);
-        op_stack.push(op_type);
+        OpType op = GetOperatorType(Cur()->value);
         Advance();
-        exp_stack.push(ParseMulExp());
+        auto rhs = ParseMulExp();
+        lhs = std::make_unique<BinaryExp>(std::move(lhs), std::move(rhs), op);
     }
-
-    return ConstructExpFromElements(exp_stack, op_stack);
+    return lhs;
 }
 
-/** MulExp → UnaryExp | MulExp ('*' | '/' | '%') UnaryExp. */
+/** MulExp -> UnaryExp | MulExp ('*' | '/' | '%') UnaryExp. */
 std::unique_ptr<Exp> Parser::ParseMulExp() {
-    std::stack<std::unique_ptr<Exp>> exp_stack;
-    std::stack<OpType> op_stack;
-    exp_stack.push(ParseUnaryExp());
-
+    auto lhs = ParseUnaryExp();
     while (CurIs(TokenType::MULT) || CurIs(TokenType::DIV) || CurIs(TokenType::MOD)) {
-        OpType op_type = GetOperatorType(Cur()->value);
-        op_stack.push(op_type);
+        OpType op = GetOperatorType(Cur()->value);
         Advance();
-        exp_stack.push(ParseUnaryExp());
+        auto rhs = ParseUnaryExp();
+        lhs = std::make_unique<BinaryExp>(std::move(lhs), std::move(rhs), op);
     }
-
-    return ConstructExpFromElements(exp_stack, op_stack);
+    return lhs;
 }
 
-std::unique_ptr<Exp> Parser::ConstructExpFromElements(std::stack<std::unique_ptr<Exp>>& exp_stack,
-                                                      std::stack<OpType>& op_stack) {
-    std::unique_ptr<Exp> rhs = std::move(exp_stack.top());
-    exp_stack.pop();
-
-    // if there is only one element in the stack, return it
-    if (exp_stack.empty()) {
-        return std::move(rhs);
-    }
-
-    // if there is more than one element in the stack, construct a binary expression
-    OpType op = op_stack.top();
-    op_stack.pop();
-
-    std::unique_ptr<Exp> lhs = ConstructExpFromElements(exp_stack, op_stack);
-    return std::make_unique<BinaryExp>(std::move(lhs), std::move(rhs), op);
-}
-
-/** UnaryExp → PrimaryExp | Ident '(' [FuncRParams] ')' | UnaryOp UnaryExp. */
+/** UnaryExp -> PrimaryExp | Ident '(' [FuncRParams] ')' | UnaryOp UnaryExp. */
 std::unique_ptr<Exp> Parser::ParseUnaryExp() {
     if (CurIs(TokenType::IDENFR) && LookaheadIs(TokenType::LPARENT)) {
         std::string ident = Cur()->value;
@@ -509,127 +594,129 @@ std::unique_ptr<Exp> Parser::ParseUnaryExp() {
         Advance();
         std::unique_ptr<FuncRParams> func_r_params = ParseFuncRParams();
         ExpectRightParen();
-        return std::make_unique<FuncCall>(ident, std::move(func_r_params));
-    } else if (CurIs(TokenType::PLUS) || CurIs(TokenType::MINU) || CurIs(TokenType::NOT)) {
+        return std::make_unique<FuncCall>(std::move(ident), std::move(func_r_params));
+    }
+    if (CurIs(TokenType::PLUS) || CurIs(TokenType::MINU) || CurIs(TokenType::NOT)) {
         OpType op = ParseUnaryOp();
         std::unique_ptr<Exp> exp = ParseUnaryExp();
         return std::make_unique<UnaryExp>(std::move(exp), op);
-    } else {
-        return ParsePrimaryExp();
     }
+    return ParsePrimaryExp();
 }
 
-/** RelExp → AddExp | RelExp ('<' | '>' | '<=' | '>=') AddExp. */
+/** RelExp -> AddExp | RelExp ('<' | '>' | '<=' | '>=') AddExp. */
 std::unique_ptr<Exp> Parser::ParseRelExp() {
-    std::stack<std::unique_ptr<Exp>> exp_stack;
-    std::stack<OpType> op_stack;
-    exp_stack.push(ParseAddExp());
-
+    auto lhs = ParseAddExp();
     while (CurIs(TokenType::LSS) || CurIs(TokenType::GRE) || CurIs(TokenType::LEQ) ||
            CurIs(TokenType::GEQ)) {
-        OpType op_type = GetOperatorType(Cur()->value);
-        op_stack.push(op_type);
+        OpType op = GetOperatorType(Cur()->value);
         Advance();
-        exp_stack.push(ParseAddExp());
+        auto rhs = ParseAddExp();
+        lhs = std::make_unique<BinaryExp>(std::move(lhs), std::move(rhs), op);
     }
-
-    return ConstructExpFromElements(exp_stack, op_stack);
+    return lhs;
 }
 
-/** EqExp → RelExp | EqExp ('==' | '!=') RelExp. */
+/** EqExp -> RelExp | EqExp ('==' | '!=') RelExp. */
 std::unique_ptr<Exp> Parser::ParseEqExp() {
-    std::stack<std::unique_ptr<Exp>> exp_stack;
-    std::stack<OpType> op_stack;
-    exp_stack.push(ParseRelExp());
-
+    auto lhs = ParseRelExp();
     while (CurIs(TokenType::EQL) || CurIs(TokenType::NEQ)) {
-        OpType op_type = GetOperatorType(Cur()->value);
-        op_stack.push(op_type);
+        OpType op = GetOperatorType(Cur()->value);
         Advance();
-        exp_stack.push(ParseRelExp());
+        auto rhs = ParseRelExp();
+        lhs = std::make_unique<BinaryExp>(std::move(lhs), std::move(rhs), op);
     }
-    return ConstructExpFromElements(exp_stack, op_stack);
+    return lhs;
 }
-/** LAndExp → EqExp | LAndExp '&&' EqExp. */
+
+/** LAndExp -> EqExp | LAndExp '&&' EqExp. */
 std::unique_ptr<Exp> Parser::ParseLAndExp() {
-    std::stack<std::unique_ptr<Exp>> exp_stack;
-    std::stack<OpType> op_stack;
-    exp_stack.push(ParseEqExp());
-
+    auto lhs = ParseEqExp();
     while (CurIs(TokenType::AND)) {
-        OpType op_type = GetOperatorType(Cur()->value);
-        op_stack.push(op_type);
+        OpType op = GetOperatorType(Cur()->value);
         Advance();
-        exp_stack.push(ParseEqExp());
+        auto rhs = ParseEqExp();
+        lhs = std::make_unique<BinaryExp>(std::move(lhs), std::move(rhs), op);
     }
-
-    return ConstructExpFromElements(exp_stack, op_stack);
+    return lhs;
 }
 
-/** LOrExp → LAndExp | LOrExp '||' LAndExp. */
+/** LOrExp -> LAndExp | LOrExp '||' LAndExp. */
 std::unique_ptr<Exp> Parser::ParseLOrExp() {
-    std::stack<std::unique_ptr<Exp>> exp_stack;
-    std::stack<OpType> op_stack;
-    exp_stack.push(ParseLAndExp());
-
+    auto lhs = ParseLAndExp();
     while (CurIs(TokenType::OR)) {
-        OpType op_type = GetOperatorType(Cur()->value);
-        op_stack.push(op_type);
+        OpType op = GetOperatorType(Cur()->value);
         Advance();
-        exp_stack.push(ParseLAndExp());
+        auto rhs = ParseLAndExp();
+        lhs = std::make_unique<BinaryExp>(std::move(lhs), std::move(rhs), op);
     }
-
-    return ConstructExpFromElements(exp_stack, op_stack);
+    return lhs;
 }
 
-/** Number → IntConst. Returns Number (Exp). */
+/** Number -> IntConst. Returns Number (Exp). */
 std::unique_ptr<Exp> Parser::ParseNumber() {
     if (CurIs(TokenType::INTCON)) {
         int int_const = std::stoi(Cur()->value);
         Advance();
         return std::make_unique<Number>(int_const);
-    } else {
-        RecordError(Cur()->line_num, "?");
-        return nullptr;
     }
+    if (Cur().has_value()) {
+        RecordError(Cur()->line_num, "?");
+    }
+    return nullptr;
 }
 
-/** Character → CharConst. Returns Character (Exp). */
+/** Character -> CharConst. Returns Character (Exp). */
 std::unique_ptr<Exp> Parser::ParseCharacter() {
     if (CurIs(TokenType::CHRCON)) {
         char char_const = Cur()->value[0];
         Advance();
         return std::make_unique<Character>(char_const);
-    } else {
-        RecordError(Cur()->line_num, "?");
-        return nullptr;
     }
+    if (Cur().has_value()) {
+        RecordError(Cur()->line_num, "?");
+    }
+    return nullptr;
 }
 
-/** UnaryOp → '+' | '−' | '!'. Consumes token and returns OpType. */
+/** UnaryOp -> '+' | '-' | '!'. Consumes token and returns OpType. */
 OpType Parser::ParseUnaryOp() {
     if (CurIs(TokenType::PLUS)) {
         Advance();
         return OpType::PLUS;
-    } else if (CurIs(TokenType::MINU)) {
+    }
+    if (CurIs(TokenType::MINU)) {
         Advance();
         return OpType::MINU;
-    } else if (CurIs(TokenType::NOT)) {
+    }
+    if (CurIs(TokenType::NOT)) {
         Advance();
         return OpType::NOT;
-    } else {
-        RecordError(Cur()->line_num, "?");
-        return OpType::NONE;
     }
+    if (Cur().has_value()) {
+        RecordError(Cur()->line_num, "?");
+    }
+    return OpType::NONE;
 }
 
-/** FuncRParams → Exp { ',' Exp }. */
+/** FuncRParams -> Exp { ',' Exp }. Empty when immediately see ')'. */
 std::unique_ptr<FuncRParams> Parser::ParseFuncRParams() {
     std::vector<std::unique_ptr<Exp>> exps;
+    if (CurIs(TokenType::RPARENT)) {
+        return std::make_unique<FuncRParams>(std::move(exps));
+    }
     exps.push_back(ParseExp());
     while (CurIs(TokenType::COMMA)) {
         Advance();
         exps.push_back(ParseExp());
     }
-    return std::make_unique<FuncRParams>(exps);
+    return std::make_unique<FuncRParams>(std::move(exps));
+}
+
+void Parser::SetParserOutput(std::ostream* out) {
+    parser_out_ = out;
+}
+
+void Parser::SetEmitParserOutput(bool enable) {
+    emit_parser_output_ = enable;
 }

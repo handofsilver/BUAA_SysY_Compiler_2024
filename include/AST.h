@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 // =============================================================================
@@ -206,40 +207,35 @@ public:
 };
 
 // =============================================================================
-// Init values: ConstInitVal / InitVal (recursive).
-// ConstInitVal -> ConstExp | '{' ... '}' | StringConst; InitVal -> Exp | '{' ... '}' | StringConst.
+// Init values: ConstInitVal / InitVal.
+// Grammar: ConstInitVal -> ConstExp | '{' [ ConstExp { ',' ConstExp } ] '}' | StringConst;
+//          InitVal     -> Exp       | '{' [ Exp       { ',' Exp       } ] '}' | StringConst.
+// One of the three alternatives; represented with std::variant for type safety.
 // =============================================================================
-enum class InitValKind { SINGLE_EXP, LIST, STRING };
 
 class ConstInitVal : public ASTNode {
 public:
-    InitValKind kind;
-    std::unique_ptr<Exp> single_exp;
-    std::vector<std::unique_ptr<ConstInitVal>> list;
-    std::string string_val;
+    using SingleExp = std::unique_ptr<ConstExp>;
+    using ExpList = std::vector<std::unique_ptr<ConstExp>>;
+    using StringVal = std::string;
+    std::variant<SingleExp, ExpList, StringVal> value;
 
-    ConstInitVal(InitValKind kind, std::unique_ptr<Exp> single_exp,
-                 std::vector<std::unique_ptr<ConstInitVal>> list, std::string string_val) :
-    kind(kind),
-    single_exp(std::move(single_exp)),
-    list(std::move(list)),
-    string_val(std::move(string_val)) {}
+    explicit ConstInitVal(SingleExp single) : value(std::move(single)) {}
+    explicit ConstInitVal(ExpList list) : value(std::move(list)) {}
+    explicit ConstInitVal(StringVal s) : value(std::move(s)) {}
     ~ConstInitVal() override = default;
 };
 
 class InitVal : public ASTNode {
 public:
-    InitValKind kind;
-    std::unique_ptr<Exp> single_exp;
-    std::vector<std::unique_ptr<InitVal>> list;
-    std::string string_val;
+    using SingleExp = std::unique_ptr<Exp>;
+    using ExpList = std::vector<std::unique_ptr<Exp>>;
+    using StringVal = std::string;
+    std::variant<SingleExp, ExpList, StringVal> value;
 
-    InitVal(InitValKind kind, std::unique_ptr<Exp> single_exp,
-            std::vector<std::unique_ptr<InitVal>> list, std::string string_val) :
-    kind(kind),
-    single_exp(std::move(single_exp)),
-    list(std::move(list)),
-    string_val(std::move(string_val)) {}
+    explicit InitVal(SingleExp single) : value(std::move(single)) {}
+    explicit InitVal(ExpList list) : value(std::move(list)) {}
+    explicit InitVal(StringVal s) : value(std::move(s)) {}
     ~InitVal() override = default;
 };
 
@@ -254,10 +250,11 @@ public:
 class ConstDef : public Def {
 public:
     std::string ident;
-    std::vector<std::unique_ptr<Exp>> dims;
+    /** Dimension sizes: ConstExp per grammar; empty for scalar. */
+    std::vector<std::unique_ptr<ConstExp>> dims;
     std::unique_ptr<ConstInitVal> const_init_val;
 
-    ConstDef(std::string ident, std::vector<std::unique_ptr<Exp>> dims,
+    ConstDef(std::string ident, std::vector<std::unique_ptr<ConstExp>> dims,
              std::unique_ptr<ConstInitVal> const_init_val) :
     ident(std::move(ident)),
     dims(std::move(dims)),
@@ -268,10 +265,11 @@ public:
 class VarDef : public Def {
 public:
     std::string ident;
-    std::vector<std::unique_ptr<Exp>> dims;
+    /** Dimension sizes: ConstExp per grammar; empty for scalar. */
+    std::vector<std::unique_ptr<ConstExp>> dims;
     std::unique_ptr<InitVal> init_val;
 
-    VarDef(std::string ident, std::vector<std::unique_ptr<Exp>> dims,
+    VarDef(std::string ident, std::vector<std::unique_ptr<ConstExp>> dims,
            std::unique_ptr<InitVal> init_val) :
     ident(std::move(ident)),
     dims(std::move(dims)),
@@ -280,7 +278,7 @@ public:
 };
 
 // =============================================================================
-// ConstDecl / VarDecl（依赖 Def / ConstDef / VarDef）
+// ConstDecl / VarDecl (depends on Def / ConstDef / VarDef)
 // =============================================================================
 class ConstDecl : public Decl {
 public:
@@ -396,7 +394,11 @@ public:
     ~IfStmt() override = default;
 };
 
-/** for ( [ForInitOrStep] ; [Cond] ; [ForInitOrStep] ) Stmt. */
+/**
+ * for ( [ForInitOrStep] ; [Cond] ; [ForInitOrStep] ) Stmt.
+ * Grammar uses "ForStmt" for the init/step clauses (LVal '=' Exp); we name the node
+ * ForInitOrStep to avoid confusion with this full for-statement.
+ */
 class ForStmt : public Stmt {
 public:
     std::optional<std::unique_ptr<ForInitOrStep>> init;

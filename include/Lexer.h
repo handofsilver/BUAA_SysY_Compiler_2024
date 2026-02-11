@@ -58,5 +58,5 @@ private:
     void GetCharConst();
     void GetWord();
     void GetIntConst();
-    void GetOperator();
+    void GetDelimitor();
 };
