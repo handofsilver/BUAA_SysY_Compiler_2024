@@ -85,7 +85,7 @@ std::optional<TokenType> GetDelimitorType(std::string_view delimitor) {
         {"}",  TokenType::RBRACE },
     };
     auto it = delimitor_map.find(std::string(delimitor));
-    if (it != delimitor_map.find(std::string(delimitor))) {
+    if (it != delimitor_map.end()) {
         return it->second;
     }
     return std::nullopt;

@@ -124,6 +124,8 @@ private:
     std::vector<std::pair<int, std::string>> error_log_;
     std::ostream* parser_out_{nullptr};
     bool emit_parser_output_{false};
+    /** Line of the last consumed token; used as error line for i/j/k (missing ; ) ]). */
+    int last_consumed_line_{0};
 
     // -------------------------------------------------------------------------
     // Token helpers
@@ -149,10 +151,9 @@ private:
      */
     bool Lookahead2Is(TokenType t);
 
-    /** Advance to next token. */
-    void Advance() {
-        lexer_.Next();
-    }
+    /** Advance to next token. When parser output is enabled, emits current token before advancing.
+     */
+    void Advance();
 
     /** Record a syntax error (line, code) and optionally synchronize; parsing continues. */
     void RecordError(int line, const std::string& code);
@@ -168,8 +169,8 @@ private:
     // -------------------------------------------------------------------------
     /**
      * If current token matches \p type, advance and return.
-     * Otherwise: if \p error_code is non-empty, record (line, error_code);
-     * if empty, record generic "?" syntax error. Does not advance on mismatch.
+     * Otherwise: if \p error_code is non-empty (must be "i"/"j"/"k" per spec), record
+     * (last_consumed_line_, error_code); if empty, do not record. Does not advance on mismatch.
      */
     void Expect(TokenType type, const std::string& error_code = "");
 

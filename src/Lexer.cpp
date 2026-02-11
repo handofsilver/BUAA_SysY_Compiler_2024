@@ -174,8 +174,19 @@ void Lexer::GetDelimitor() {
             return;
         }
     }
-    error_log_.push_back({static_cast<int>(line_num_ + 1), "a"});
-    cur_pos_++;
+    // Illegal symbol '&' or '|': report error 'a', but still produce token (as &&/||) so parsing
+    // continues; value remains "&"/"|" per spec.
+    if (NotEnd()) {
+        const int line = static_cast<int>(line_num_ + 1);
+        error_log_.push_back({line, "a"});
+        char ch = source_[cur_pos_];
+        if (ch == '&') {
+            cur_token_ = Token(TokenType::AND, line, "&");
+        } else if (ch == '|') {
+            cur_token_ = Token(TokenType::OR, line, "|");
+        }
+        cur_pos_++;
+    }
 }
 
 // -------------------------------------------------------------------------

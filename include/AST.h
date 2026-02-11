@@ -4,7 +4,6 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -41,31 +40,7 @@ enum class OpType {
     NONE,
 };
 
-OpType GetOperatorType(std::string_view op) {
-    static const std::unordered_map<std::string, OpType> operator_map = {
-        {"+",  OpType::ADD },
-        {"-",  OpType::SUB },
-        {"*",  OpType::MUL },
-        {"/",  OpType::DIV },
-        {"%",  OpType::MOD },
-        {"<",  OpType::LT  },
-        {">",  OpType::GT  },
-        {"<=", OpType::LE  },
-        {">=", OpType::GE  },
-        {"==", OpType::EQ  },
-        {"!=", OpType::NE  },
-        {"&&", OpType::AND },
-        {"||", OpType::OR  },
-        {"!",  OpType::NOT },
-        {"+",  OpType::PLUS},
-        {"-",  OpType::MINU},
-    };
-    auto it = operator_map.find(std::string(op));
-    if (it != operator_map.end()) {
-        return it->second;
-    }
-    return OpType::NONE;
-}
+OpType GetOperatorType(std::string_view op);
 
 // =============================================================================
 // Basic type (BType) / function type (FuncType shares BType)

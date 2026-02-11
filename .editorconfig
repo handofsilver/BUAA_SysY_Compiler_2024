@@ -1,0 +1,12 @@
+# http://editorconfig.org
+root = true
+
+[*]
+indent_style = space          # 缩进用空格（工业主流）
+indent_size = 4               # 缩进大小
+end_of_line = lf              # 强制换行符为 LF
+insert_final_newline = true   # 文件末尾强制留一空行（Unix 标准）
+trim_trailing_whitespace = true # 自动删掉行末多余空格
+
+[*.{json,yml,yaml}]
+indent_size = 2               # JSON/YAML 通常习惯用 2 空格
