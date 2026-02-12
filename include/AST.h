@@ -10,6 +10,7 @@
 // =============================================================================
 // Forward declarations
 // =============================================================================
+class ASTVisitor;
 class Block;
 class Stmt;
 class Exp;
@@ -60,10 +61,18 @@ public:
     ASTNode(const ASTNode&) = delete;
     ASTNode& operator=(const ASTNode&) = delete;
 
+    /** Double-dispatch: call visitor.VisitXxx(*this). Defined in AST.cpp. */
+    virtual void Accept(ASTVisitor& visitor) = 0;
+
+    /** Source line (1-based). Parser should set for error reporting. Default 0. */
+    int GetLine() const { return line_; }
+    void SetLine(int line) { line_ = line; }
+
 protected:
     ASTNode() = default;
     ASTNode(ASTNode&&) = default;
     ASTNode& operator=(ASTNode&&) = default;
+    int line_ = 0;
 };
 
 // =============================================================================
@@ -103,6 +112,7 @@ public:
     index(std::move(index)) {}
     LVal(std::string ident) : ident(std::move(ident)) {}
 
+    void Accept(ASTVisitor& visitor) override;
     ~LVal() override = default;
 };
 
@@ -112,6 +122,7 @@ public:
     int int_const;
 
     explicit Number(int value) : int_const(value) {}
+    void Accept(ASTVisitor& visitor) override;
     ~Number() override = default;
 };
 
@@ -121,6 +132,7 @@ public:
     char char_const;
 
     explicit Character(char value) : char_const(value) {}
+    void Accept(ASTVisitor& visitor) override;
     ~Character() override = default;
 };
 
@@ -135,6 +147,7 @@ public:
     lhs(std::move(lhs)),
     rhs(std::move(rhs)),
     op(op) {}
+    void Accept(ASTVisitor& visitor) override;
     ~BinaryExp() override = default;
 };
 
@@ -145,6 +158,7 @@ public:
     OpType op;
 
     UnaryExp(std::unique_ptr<Exp> operand, OpType op) : operand(std::move(operand)), op(op) {}
+    void Accept(ASTVisitor& visitor) override;
     ~UnaryExp() override = default;
 };
 
@@ -167,6 +181,7 @@ public:
     FuncCall(std::string ident, std::unique_ptr<FuncRParams> func_r_params) :
     ident(std::move(ident)),
     func_r_params(std::move(func_r_params)) {}
+    void Accept(ASTVisitor& visitor) override;
     ~FuncCall() override = default;
 };
 
@@ -178,6 +193,7 @@ public:
     std::unique_ptr<Exp> inner;
 
     explicit ConstExp(std::unique_ptr<Exp> inner) : inner(std::move(inner)) {}
+    void Accept(ASTVisitor& visitor) override;
     ~ConstExp() override = default;
 };
 
@@ -198,6 +214,7 @@ public:
     explicit ConstInitVal(SingleExp single) : value(std::move(single)) {}
     explicit ConstInitVal(ExpList list) : value(std::move(list)) {}
     explicit ConstInitVal(StringVal s) : value(std::move(s)) {}
+    void Accept(ASTVisitor& visitor) override;
     ~ConstInitVal() override = default;
 };
 
@@ -211,6 +228,7 @@ public:
     explicit InitVal(SingleExp single) : value(std::move(single)) {}
     explicit InitVal(ExpList list) : value(std::move(list)) {}
     explicit InitVal(StringVal s) : value(std::move(s)) {}
+    void Accept(ASTVisitor& visitor) override;
     ~InitVal() override = default;
 };
 
@@ -225,30 +243,32 @@ public:
 class ConstDef : public Def {
 public:
     std::string ident;
-    /** Dimension sizes: ConstExp per grammar; empty for scalar. */
-    std::vector<std::unique_ptr<ConstExp>> dims;
+    /** Grammar: at most one [ ConstExp ]; empty = scalar, has value = 1D array. */
+    std::optional<std::unique_ptr<ConstExp>> array_size;
     std::unique_ptr<ConstInitVal> const_init_val;
 
-    ConstDef(std::string ident, std::vector<std::unique_ptr<ConstExp>> dims,
+    ConstDef(std::string ident, std::optional<std::unique_ptr<ConstExp>> array_size,
              std::unique_ptr<ConstInitVal> const_init_val) :
     ident(std::move(ident)),
-    dims(std::move(dims)),
+    array_size(std::move(array_size)),
     const_init_val(std::move(const_init_val)) {}
+    void Accept(ASTVisitor& visitor) override;
     ~ConstDef() override = default;
 };
 
 class VarDef : public Def {
 public:
     std::string ident;
-    /** Dimension sizes: ConstExp per grammar; empty for scalar. */
-    std::vector<std::unique_ptr<ConstExp>> dims;
+    /** Grammar: at most one [ ConstExp ]; empty = scalar, has value = 1D array. */
+    std::optional<std::unique_ptr<ConstExp>> array_size;
     std::unique_ptr<InitVal> init_val;
 
-    VarDef(std::string ident, std::vector<std::unique_ptr<ConstExp>> dims,
+    VarDef(std::string ident, std::optional<std::unique_ptr<ConstExp>> array_size,
            std::unique_ptr<InitVal> init_val) :
     ident(std::move(ident)),
-    dims(std::move(dims)),
+    array_size(std::move(array_size)),
     init_val(std::move(init_val)) {}
+    void Accept(ASTVisitor& visitor) override;
     ~VarDef() override = default;
 };
 
@@ -263,6 +283,7 @@ public:
     ConstDecl(BType btype, std::vector<std::unique_ptr<ConstDef>> const_defs) :
     btype(btype),
     const_defs(std::move(const_defs)) {}
+    void Accept(ASTVisitor& visitor) override;
     ~ConstDecl() override = default;
 };
 
@@ -274,6 +295,7 @@ public:
     VarDecl(BType btype, std::vector<std::unique_ptr<VarDef>> var_defs) :
     btype(btype),
     var_defs(std::move(var_defs)) {}
+    void Accept(ASTVisitor& visitor) override;
     ~VarDecl() override = default;
 };
 
@@ -290,6 +312,7 @@ public:
     btype(btype),
     ident(std::move(ident)),
     is_array(is_array) {}
+    void Accept(ASTVisitor& visitor) override;
     ~FuncFParam() override = default;
 };
 
@@ -302,6 +325,7 @@ public:
 
     explicit Block(std::vector<std::unique_ptr<BlockItem>> block_items) :
     block_items(std::move(block_items)) {}
+    void Accept(ASTVisitor& visitor) override;
     ~Block() override = default;
 };
 
@@ -316,6 +340,7 @@ public:
     ForInitOrStep(std::unique_ptr<LVal> lval, std::unique_ptr<Exp> exp) :
     lval(std::move(lval)),
     exp(std::move(exp)) {}
+    void Accept(ASTVisitor& visitor) override;
     ~ForInitOrStep() override = default;
 };
 
@@ -333,6 +358,7 @@ public:
     AssignStmt(std::unique_ptr<LVal> lval, std::unique_ptr<Exp> exp) :
     lval(std::move(lval)),
     exp(std::move(exp)) {}
+    void Accept(ASTVisitor& visitor) override;
     ~AssignStmt() override = default;
 };
 
@@ -342,6 +368,7 @@ public:
     std::optional<std::unique_ptr<Exp>> exp;
 
     explicit ExpStmt(std::optional<std::unique_ptr<Exp>> exp) : exp(std::move(exp)) {}
+    void Accept(ASTVisitor& visitor) override;
     ~ExpStmt() override = default;
 };
 
@@ -351,6 +378,7 @@ public:
     std::unique_ptr<Block> block;
 
     explicit BlockStmt(std::unique_ptr<Block> block) : block(std::move(block)) {}
+    void Accept(ASTVisitor& visitor) override;
     ~BlockStmt() override = default;
 };
 
@@ -366,6 +394,7 @@ public:
     cond(std::move(cond)),
     then_stmt(std::move(then_stmt)),
     else_stmt(std::move(else_stmt)) {}
+    void Accept(ASTVisitor& visitor) override;
     ~IfStmt() override = default;
 };
 
@@ -388,18 +417,21 @@ public:
     cond(std::move(cond)),
     step(std::move(step)),
     body(std::move(body)) {}
+    void Accept(ASTVisitor& visitor) override;
     ~ForStmt() override = default;
 };
 
 class BreakStmt : public Stmt {
 public:
     BreakStmt() = default;
+    void Accept(ASTVisitor& visitor) override;
     ~BreakStmt() override = default;
 };
 
 class ContinueStmt : public Stmt {
 public:
     ContinueStmt() = default;
+    void Accept(ASTVisitor& visitor) override;
     ~ContinueStmt() override = default;
 };
 
@@ -409,6 +441,7 @@ public:
     std::optional<std::unique_ptr<Exp>> exp;
 
     explicit ReturnStmt(std::optional<std::unique_ptr<Exp>> exp) : exp(std::move(exp)) {}
+    void Accept(ASTVisitor& visitor) override;
     ~ReturnStmt() override = default;
 };
 
@@ -418,6 +451,7 @@ public:
     std::unique_ptr<LVal> lval;
 
     explicit GetintStmt(std::unique_ptr<LVal> lval) : lval(std::move(lval)) {}
+    void Accept(ASTVisitor& visitor) override;
     ~GetintStmt() override = default;
 };
 
@@ -427,6 +461,7 @@ public:
     std::unique_ptr<LVal> lval;
 
     explicit GetcharStmt(std::unique_ptr<LVal> lval) : lval(std::move(lval)) {}
+    void Accept(ASTVisitor& visitor) override;
     ~GetcharStmt() override = default;
 };
 
@@ -439,6 +474,7 @@ public:
     PrintfStmt(std::string format_string, std::vector<std::unique_ptr<Exp>> exp_list) :
     format_string(std::move(format_string)),
     exp_list(std::move(exp_list)) {}
+    void Accept(ASTVisitor& visitor) override;
     ~PrintfStmt() override = default;
 };
 
@@ -458,6 +494,7 @@ public:
     ident(std::move(ident)),
     func_f_params(std::move(func_f_params)),
     block(std::move(block)) {}
+    void Accept(ASTVisitor& visitor) override;
     ~FuncDef() override = default;
 };
 
@@ -466,6 +503,7 @@ public:
     std::unique_ptr<Block> block;
 
     explicit MainFuncDef(std::unique_ptr<Block> block) : block(std::move(block)) {}
+    void Accept(ASTVisitor& visitor) override;
     ~MainFuncDef() override = default;
 };
 
@@ -484,5 +522,6 @@ public:
     decls(std::move(decls)),
     func_defs(std::move(func_defs)),
     main_func_def(std::move(main_func_def)) {}
+    void Accept(ASTVisitor& visitor) override;
     ~CompUnit() override = default;
 };

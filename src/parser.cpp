@@ -188,30 +188,30 @@ std::unique_ptr<VarDecl> Parser::ParseVarDecl() {
 // Def and init values
 // -------------------------------------------------------------------------
 
-/** ConstDef -> Ident [ '[' ConstExp ']' ] '=' ConstInitVal. */
+/** ConstDef -> Ident [ '[' ConstExp ']' ] '=' ConstInitVal. Grammar: at most one dimension. */
 std::unique_ptr<ConstDef> Parser::ParseConstDef() {
     std::string ident = Cur()->value;
     Expect(TokenType::IDENFR, "");
-    std::vector<std::unique_ptr<ConstExp>> dims;
+    std::optional<std::unique_ptr<ConstExp>> array_size;
     if (CurIs(TokenType::LBRACK)) {
         Advance();
-        dims.push_back(ParseConstExp());
+        array_size = ParseConstExp();
         ExpectRightBracket();
     }
     Expect(TokenType::ASSIGN, "");
     std::unique_ptr<ConstInitVal> const_init_val = ParseConstInitVal();
     EmitSyntax("<ConstDef>");
-    return std::make_unique<ConstDef>(std::move(ident), std::move(dims), std::move(const_init_val));
+    return std::make_unique<ConstDef>(std::move(ident), std::move(array_size), std::move(const_init_val));
 }
 
-/** VarDef -> Ident [ '[' ConstExp ']' ] [ '=' InitVal ]. */
+/** VarDef -> Ident [ '[' ConstExp ']' ] [ '=' InitVal ]. Grammar: at most one dimension. */
 std::unique_ptr<VarDef> Parser::ParseVarDef() {
     std::string ident = Cur()->value;
     Expect(TokenType::IDENFR, "");
-    std::vector<std::unique_ptr<ConstExp>> dims;
+    std::optional<std::unique_ptr<ConstExp>> array_size;
     if (CurIs(TokenType::LBRACK)) {
         Advance();
-        dims.push_back(ParseConstExp());
+        array_size = ParseConstExp();
         ExpectRightBracket();
     }
     std::unique_ptr<InitVal> init_val;
@@ -220,7 +220,7 @@ std::unique_ptr<VarDef> Parser::ParseVarDef() {
         init_val = ParseInitVal();
     }
     EmitSyntax("<VarDef>");
-    return std::make_unique<VarDef>(std::move(ident), std::move(dims), std::move(init_val));
+    return std::make_unique<VarDef>(std::move(ident), std::move(array_size), std::move(init_val));
 }
 
 /** ConstInitVal -> ConstExp | '{' [ ConstExp { ',' ConstExp } ] '}' | StringConst. */
