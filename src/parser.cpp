@@ -95,6 +95,13 @@ void Parser::EmitToken() {
     }
 }
 
+void Parser::EmitExpChainAfterLVal() {
+    EmitSyntax("<PrimaryExp>");
+    EmitSyntax("<UnaryExp>");
+    EmitSyntax("<MulExp>");
+    EmitSyntax("<AddExp>");
+}
+
 void Parser::EmitSyntax(std::string_view name) {
     if (emit_parser_output_) {
         *parser_out_ << name << std::endl;
@@ -568,23 +575,32 @@ std::unique_ptr<Stmt> Parser::ParseOtherStmt() {
     }
 
     if (CurIs(TokenType::SEMICN)) {
+        // ExpStmt with single LVal: LVal already emitted; emit Exp chain for output requirement.
+        EmitExpChainAfterLVal();
+        EmitSyntax("<Exp>");
         Advance();
         EmitSyntax("<Stmt>");
         return std::make_unique<ExpStmt>(std::nullopt);
     }
     if (!Cur().has_value()) {
         RecordError(0, "?");
+        EmitExpChainAfterLVal();
+        EmitSyntax("<Exp>");
         ExpectSemicolon();
         EmitSyntax("<Stmt>");
         return std::make_unique<ExpStmt>(std::nullopt);
     }
+    // ExpStmt with LVal Op Exp: emit Exp chain for left operand; ParseExp() will emit right +
+    // <Exp>.
+    EmitExpChainAfterLVal();
     OpType op = GetOperatorType(Cur()->value);
     Advance();
-    std::unique_ptr<Exp> exp = ParseExp();
+    std::unique_ptr<Exp> rhs = ParseExp();
     ExpectSemicolon();
     EmitSyntax("<Stmt>");
+    std::unique_ptr<Exp> lhs = std::move(lval); // LVal is-a Exp
     return std::make_unique<ExpStmt>(
-        std::make_optional(std::make_unique<BinaryExp>(std::move(lval), std::move(exp), op)));
+        std::make_optional(std::make_unique<BinaryExp>(std::move(lhs), std::move(rhs), op)));
 }
 
 // -------------------------------------------------------------------------

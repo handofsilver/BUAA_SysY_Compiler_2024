@@ -164,6 +164,13 @@ private:
     /** Emit a syntax component name like "<CompUnit>" if enabled. */
     void EmitSyntax(std::string_view name);
 
+    /**
+     * Emit the syntax chain that would follow <LVal> when LVal is used as an expression.
+     * Used only for parser output: in ExpStmt we parse LVal first (unified strategy);
+     * to match course requirement we must output <PrimaryExp>, <UnaryExp>, <MulExp>, <AddExp>.
+     */
+    void EmitExpChainAfterLVal();
+
     // -------------------------------------------------------------------------
     // Expect / consume helpers
     // -------------------------------------------------------------------------
