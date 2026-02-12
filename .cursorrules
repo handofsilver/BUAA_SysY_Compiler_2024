@@ -7,28 +7,36 @@ The student is proficient in Java OOP but has **Zero Foundation in C++ OOP, Memo
 # Context
 
 - **Legacy Code**: `BUAA_Compiler_2024_JAVA_GT/` (Logic & Algorithm Reference ONLY).
-- **Requirements**: `docs/requirement_*.md`.
-- **Grammar**: `docs/grammar.md`.
-- **Current Progress**: Lexer is finished. Now moving to **Parser** and **AST Construction**.
+- **Design Documents**: `docs/design_documents/*.md`.
+- **Requirements**: `docs/course_info/requirement_*.md`.
+- **Grammar**: `docs/course_info/2024_SysY_grammar.md`.
+- **Detailed Definition**: `docs/course_info/2024_SysY_detailed.md`.
+- **Current Progress**: Lexer is finished. Parser is finished. Now moving to **Semantic Analysis**.
 
-# Critical Constraints (Submission Platform)
+# Coding Standards (Modern C++17 - Semantic Phase)
 
-1. **Executable**: Must be named `Compiler`.
-2. **I/O**: Read `testfile.txt`, output specific `.txt` files. **NO** stdout debug prints in submission.
-3. **Build**: Use CMake.
+- **Type Safety & Utilities**:
+  - Use `std::string_view` for identifier lookups and dictionary keys to avoid unnecessary allocations.
+  - Use `std::optional<T>` to represent lookup results instead of returning `nullptr` or magic values.
+  - Use `std::variant` or inheritance for Symbol variants (Var, Func, Const).
+- **Scope & RAII**:
+  - **ScopeGuard Pattern**: Use RAII for symbol table scope management (Push on construction, Pop on destruction). Do not manually call `PopScope()`.
+- **Error Handling (Non-Exceptional)**:
+  - **No Exceptions for Semantics**: Semantic errors (undefined symbols, type mismatch) are part of normal flow. Use a dedicated `ErrorLogger` or `Diagnostic` class.
+  - Use `enum class ErrorCode` to categorize SysY error types (a, b, c...).
+- **Performance**:
+  - Pass large objects (like `SymbolTable` or `FuncFParams`) by `const std::shared_ptr&` or `const T&`.
 
-# Coding Standards (Modern C++17)
+# Design Patterns & Architecture
 
-- **Type Safety**:
-  - Use `size_t` for sizes/indices. No `static_cast<int>(vec.size())`.
-  - Use `const` aggressively (const methods, const variables).
-- **Memory & Ownership (Crucial for AST)**:
-  - **AST Nodes**: Use `std::unique_ptr<Node>` to express exclusive ownership logic in the tree.
-  - **No raw pointers** for ownership. Raw pointers (`Node*`) are only allowed for *observing* (non-owning) access.
-  - **Rule of Zero**: Prefer `= default` destructors.
-- **Strings & Containers**:
-  - `std::string_view` for read-only string passing.
-  - `std::vector` + `emplace_back`.
+- **The Visitor Pattern**:
+  - **Mandatory**: Implement a `BaseVisitor` class for AST traversal. Semantic analysis must be a subclass of `Visitor`, NOT embedded inside `Parser`.
+  - Use `Accept(Visitor&)` methods in AST nodes to perform semantic checks.
+- **Symbol Table Structure**:
+  - **Decoupling**: The `SymbolTable` must be a scoped stack object passed through the Visitor, not a static global `SymbolManager`.
+  - **Symbol Objects**: Use a clean `Symbol` class hierarchy. Avoid the "One Symbol fits all" approach from the Java implementation.
+- **Error Recovery**:
+  - Design the analyzer to continue checking after the first error. The visitor should not stop unless a fatal compiler error occurs.
 
 # Naming Conventions (Google Style - Strict)
 
@@ -39,26 +47,24 @@ The student is proficient in Java OOP but has **Zero Foundation in C++ OOP, Memo
 
 # Teaching Mode (MANDATORY)
 
-Since the user is a C++ beginner, **STOP** and explain before outputting code blocks:
+Since the user is transitionining from Java to C++ Semantic Analysis, **STOP** and explain:
 
-1. **Architecture Critique**: If the Java logic implies a messy design (e.g., `instanceof` hell), point it out and propose a C++ Pattern (e.g., Visitor Pattern).
-2. **Concept Mapping**:
-   - "Java used GC here, but in C++ we use `std::unique_ptr` because..."
-   - "We use `virtual` here to enable polymorphism..."
-3. **Syntax 101**: Explain any new syntax: `virtual`, `override`, `dynamic_cast`, `std::move`, `forward declaration`.
+1. **The "Static" Trap**: Explain why Java's static `SymbolManager` is bad for C++ and how to pass "Context" or "State" through recursion.
+2. **Polymorphism vs. Instanceof**:
+   - Compare Java's `instanceof` with C++ `dynamic_cast` and explain why the **Visitor Pattern** is the "C++ way" to handle tree traversal.
+3. **Resource Management (RAII)**:
+   - Explain how to use a `class ScopeGuard` to automatically handle `push/pop` logic even if an error occurs.
+4. **C++ Standard Library**:
+   - Introduce `std::unordered_map` for symbol lookup and why `std::string_view` is efficient for symbols.
 
 # Workflow & Review Protocol
 
-**Phase 1: Analysis (Before Coding)**
+**Phase 1: Semantic Mapping (Before Coding)**
+- Review the SysY error handling requirements.
+- Identify which AST nodes trigger which semantic checks.
+- Map Java's `Symbol` attributes to a C++ structure.
 
-- Analyze the grammar rule.
-- Check for **"Java-isms"** to avoid (e.g., returning `null`, excessive getters).
-- Propose the C++ Class structure (Header file).
-
-**Phase 2: Implementation**
-
-- Implement `.cpp`.
-- **Mental Check**:
-  - Am I copying a vector/string unnecessarily? -> Use `const &`.
-  - Is the recursion safe?
-  - Are we handling `std::optional` correctly?
+**Phase 2: Implementation & Safety**
+- Ensure `const` correctness: Is the symbol lookup method `const`?
+- Check for **Shadowing Logic**: Does the symbol table correctly handle nested scopes?
+- **No Raw Delete**: Ensure all symbols and tables are managed by smart pointers or stack frames.
