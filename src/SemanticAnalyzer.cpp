@@ -12,11 +12,13 @@ namespace {
 
     BType ToBType(SymbolType t) {
         if (t == SymbolType::INT || t == SymbolType::INT_FUNC || t == SymbolType::CONST_INT ||
-            t == SymbolType::INT_ARRAY || t == SymbolType::CONST_INT_ARRAY)
+            t == SymbolType::INT_ARRAY || t == SymbolType::CONST_INT_ARRAY) {
             return BType::INT;
+        }
         if (t == SymbolType::CHAR || t == SymbolType::CHAR_FUNC || t == SymbolType::CONST_CHAR ||
-            t == SymbolType::CHAR_ARRAY || t == SymbolType::CONST_CHAR_ARRAY)
+            t == SymbolType::CHAR_ARRAY || t == SymbolType::CONST_CHAR_ARRAY) {
             return BType::CHAR;
+        }
         return BType::VOID;
     }
 
@@ -33,10 +35,12 @@ namespace {
         return b == BType::INT ? SymbolType::INT_ARRAY : SymbolType::CHAR_ARRAY;
     }
     SymbolType BTypeToFunc(BType b) {
-        if (b == BType::VOID)
+        if (b == BType::VOID) {
             return SymbolType::VOID_FUNC;
-        if (b == BType::INT)
+        }
+        if (b == BType::INT) {
             return SymbolType::INT_FUNC;
+        }
         return SymbolType::CHAR_FUNC;
     }
 
@@ -46,11 +50,11 @@ bool SemanticAnalyzer::Analyze(CompUnit& root) {
     symbol_table_.PushScope(); // global scope id = 1
     root.Accept(*this);
     symbol_table_.PopScope();
-    return errors_.empty();
+    return error_log_.empty();
 }
 
 void SemanticAnalyzer::RecordError(int line, const std::string& code) {
-    errors_.emplace_back(line, code);
+    error_log_.emplace_back(line, code);
 }
 
 bool SemanticAnalyzer::RegisterSymbol(const std::string& name, Symbol symbol, int line) {
@@ -74,12 +78,15 @@ void SemanticAnalyzer::VisitBlockContents(Block& block) {
 // CompUnit: visit decls, func_defs, main (all in global scope).
 // -----------------------------------------------------------------------------
 void SemanticAnalyzer::VisitCompUnit(CompUnit& node) {
-    for (auto& d : node.decls)
+    for (auto& d : node.decls) {
         d->Accept(*this);
-    for (auto& f : node.func_defs)
+    }
+    for (auto& f : node.func_defs) {
         f->Accept(*this);
-    if (node.main_func_def)
+    }
+    if (node.main_func_def) {
         node.main_func_def->Accept(*this);
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -88,16 +95,18 @@ void SemanticAnalyzer::VisitCompUnit(CompUnit& node) {
 void SemanticAnalyzer::VisitConstDecl(ConstDecl& node) {
     BType prev = current_decl_btype_;
     current_decl_btype_ = node.btype;
-    for (auto& def : node.const_defs)
+    for (auto& def : node.const_defs) {
         def->Accept(*this);
+    }
     current_decl_btype_ = prev;
 }
 
 void SemanticAnalyzer::VisitVarDecl(VarDecl& node) {
     BType prev = current_decl_btype_;
     current_decl_btype_ = node.btype;
-    for (auto& def : node.var_defs)
+    for (auto& def : node.var_defs) {
         def->Accept(*this);
+    }
     current_decl_btype_ = prev;
 }
 
@@ -124,16 +133,18 @@ void SemanticAnalyzer::VisitFuncDef(FuncDef& node) {
     for (const auto& p : node.func_f_params) {
         sym.param_types.push_back({p->btype, p->is_array});
     }
-    if (!RegisterSymbol(node.ident, sym, line))
+    if (!RegisterSymbol(node.ident, sym, line)) {
         return;
+    }
 
     ScopeGuard guard(
         symbol_table_); // one scope for params + body (requirement: 函数的参数属于函数内部的作用域)
     BType prev_func = current_func_type_;
     current_func_type_ = node.func_type;
 
-    for (auto& p : node.func_f_params)
+    for (auto& p : node.func_f_params) {
         p->Accept(*this);
+    }
     VisitBlockContents(*node.block);
 
     current_func_type_ = prev_func;
@@ -196,43 +207,54 @@ void SemanticAnalyzer::VisitFuncFParam(FuncFParam& node) {
 // Statements: recurse and optional checks (break/continue, return type, printf).
 // -----------------------------------------------------------------------------
 void SemanticAnalyzer::VisitBlockStmt(BlockStmt& node) {
-    if (node.block)
+    if (node.block) {
         node.block->Accept(*this);
+    }
 }
 
 void SemanticAnalyzer::VisitAssignStmt(AssignStmt& node) {
     lval_is_left_of_assign_ = true;
-    if (node.lval)
+    if (node.lval) {
         node.lval->Accept(*this);
+    }
     lval_is_left_of_assign_ = false;
-    if (node.exp)
+    if (node.exp) {
         node.exp->Accept(*this);
+    }
 }
 
 void SemanticAnalyzer::VisitExpStmt(ExpStmt& node) {
-    if (node.exp.has_value() && *node.exp)
+    if (node.exp.has_value() && *node.exp) {
         (*node.exp)->Accept(*this);
+    }
 }
 
 void SemanticAnalyzer::VisitIfStmt(IfStmt& node) {
-    if (node.cond)
+    if (node.cond) {
         node.cond->Accept(*this);
-    if (node.then_stmt)
+    }
+    if (node.then_stmt) {
         node.then_stmt->Accept(*this);
-    if (node.else_stmt.has_value() && *node.else_stmt)
+    }
+    if (node.else_stmt.has_value() && *node.else_stmt) {
         (*node.else_stmt)->Accept(*this);
+    }
 }
 
 void SemanticAnalyzer::VisitForStmt(ForStmt& node) {
-    if (node.init.has_value() && *node.init)
+    if (node.init.has_value() && *node.init) {
         (*node.init)->Accept(*this);
-    if (node.cond.has_value() && *node.cond)
+    }
+    if (node.cond.has_value() && *node.cond) {
         (*node.cond)->Accept(*this);
-    if (node.step.has_value() && *node.step)
+    }
+    if (node.step.has_value() && *node.step) {
         (*node.step)->Accept(*this);
+    }
     loop_depth_++;
-    if (node.body)
+    if (node.body) {
         node.body->Accept(*this);
+    }
     loop_depth_--;
 }
 
@@ -254,31 +276,36 @@ void SemanticAnalyzer::VisitReturnStmt(ReturnStmt& node) {
 
 void SemanticAnalyzer::VisitGetintStmt(GetintStmt& node) {
     lval_is_left_of_assign_ = true;
-    if (node.lval)
+    if (node.lval) {
         node.lval->Accept(*this);
+    }
     lval_is_left_of_assign_ = false;
 }
 
 void SemanticAnalyzer::VisitGetcharStmt(GetcharStmt& node) {
     lval_is_left_of_assign_ = true;
-    if (node.lval)
+    if (node.lval) {
         node.lval->Accept(*this);
+    }
     lval_is_left_of_assign_ = false;
 }
 
 void SemanticAnalyzer::VisitPrintfStmt(PrintfStmt& node) {
     // TODO: check format string vs exp_list count (error l).
-    for (auto& e : node.exp_list)
+    for (auto& e : node.exp_list) {
         e->Accept(*this);
+    }
 }
 
 void SemanticAnalyzer::VisitForInitOrStep(ForInitOrStep& node) {
     lval_is_left_of_assign_ = true;
-    if (node.lval)
+    if (node.lval) {
         node.lval->Accept(*this);
+    }
     lval_is_left_of_assign_ = false;
-    if (node.exp)
+    if (node.exp) {
         node.exp->Accept(*this);
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -293,8 +320,9 @@ void SemanticAnalyzer::VisitLVal(LVal& node) {
     if (lval_is_left_of_assign_ && IsConst(s->type)) {
         RecordError(node.GetLine(), "h"); // assign to constant
     }
-    if (node.index)
+    if (node.index) {
         node.index->Accept(*this);
+    }
 }
 
 void SemanticAnalyzer::VisitNumber(Number& node) {
@@ -306,15 +334,18 @@ void SemanticAnalyzer::VisitCharacter(Character& node) {
 }
 
 void SemanticAnalyzer::VisitBinaryExp(BinaryExp& node) {
-    if (node.lhs)
+    if (node.lhs) {
         node.lhs->Accept(*this);
-    if (node.rhs)
+    }
+    if (node.rhs) {
         node.rhs->Accept(*this);
+    }
 }
 
 void SemanticAnalyzer::VisitUnaryExp(UnaryExp& node) {
-    if (node.operand)
+    if (node.operand) {
         node.operand->Accept(*this);
+    }
 }
 
 void SemanticAnalyzer::VisitFuncCall(FuncCall& node) {
@@ -330,35 +361,41 @@ void SemanticAnalyzer::VisitFuncCall(FuncCall& node) {
     // TODO: check argument count (d) and argument types (e). Compare node.func_r_params with
     // s->param_types.
     if (node.func_r_params) {
-        for (auto& exp : node.func_r_params->func_r_params)
+        for (auto& exp : node.func_r_params->func_r_params) {
             exp->Accept(*this);
+        }
     }
 }
 
 void SemanticAnalyzer::VisitConstExp(ConstExp& node) {
-    if (node.inner)
+    if (node.inner) {
         node.inner->Accept(*this);
+    }
     // TODO: constant folding: compute int result and store for use in ConstDef dims / const_value.
 }
 
 void SemanticAnalyzer::VisitConstInitVal(ConstInitVal& node) {
     if (std::holds_alternative<ConstInitVal::SingleExp>(node.value)) {
         auto& p = std::get<ConstInitVal::SingleExp>(node.value);
-        if (p)
+        if (p) {
             p->Accept(*this);
+        }
     } else if (std::holds_alternative<ConstInitVal::ExpList>(node.value)) {
-        for (auto& e : std::get<ConstInitVal::ExpList>(node.value))
+        for (auto& e : std::get<ConstInitVal::ExpList>(node.value)) {
             e->Accept(*this);
+        }
     }
 }
 
 void SemanticAnalyzer::VisitInitVal(InitVal& node) {
     if (std::holds_alternative<InitVal::SingleExp>(node.value)) {
         auto& p = std::get<InitVal::SingleExp>(node.value);
-        if (p)
+        if (p) {
             p->Accept(*this);
+        }
     } else if (std::holds_alternative<InitVal::ExpList>(node.value)) {
-        for (auto& e : std::get<InitVal::ExpList>(node.value))
+        for (auto& e : std::get<InitVal::ExpList>(node.value)) {
             e->Accept(*this);
+        }
     }
 }

@@ -201,7 +201,8 @@ std::unique_ptr<ConstDef> Parser::ParseConstDef() {
     Expect(TokenType::ASSIGN, "");
     std::unique_ptr<ConstInitVal> const_init_val = ParseConstInitVal();
     EmitSyntax("<ConstDef>");
-    return std::make_unique<ConstDef>(std::move(ident), std::move(array_size), std::move(const_init_val));
+    return std::make_unique<ConstDef>(std::move(ident), std::move(array_size),
+                                      std::move(const_init_val));
 }
 
 /** VarDef -> Ident [ '[' ConstExp ']' ] [ '=' InitVal ]. Grammar: at most one dimension. */

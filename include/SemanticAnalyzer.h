@@ -25,8 +25,8 @@ public:
     /** Entry: run semantic analysis on root. Returns false if any errors were recorded. */
     bool Analyze(CompUnit& root);
 
-    const std::vector<std::pair<int, std::string>>& GetErrors() const {
-        return errors_;
+    const std::vector<std::pair<int, std::string>>& GetErrorLog() const {
+        return error_log_;
     }
     /** For symbol.txt: (scope_id, symbol) in requirement order (scope then declaration). */
     const SymbolTable::OrderedSymbolList& GetOrderedSymbols() const {
@@ -69,7 +69,7 @@ public:
 
 private:
     SymbolTable symbol_table_;
-    std::vector<std::pair<int, std::string>> errors_;
+    std::vector<std::pair<int, std::string>> error_log_;
     /** Appended on each successful Register; used for symbol.txt output. */
     SymbolTable::OrderedSymbolList ordered_symbols_;
 

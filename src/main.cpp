@@ -14,7 +14,9 @@
 
 int main() {
     std::ifstream in("testfile.txt");
-    if (!in) return 1;
+    if (!in) {
+        return 1;
+    }
     std::ostringstream buf;
     buf << in.rdbuf();
     std::string source = buf.str();
@@ -30,14 +32,20 @@ int main() {
     auto comp_unit = parser.ParseCompUnit();
 
     std::vector<std::pair<int, std::string>> all_errors;
-    for (const auto& p : lexer.GetErrorLog()) all_errors.push_back(p);
-    for (const auto& p : parser.GetErrorLog()) all_errors.push_back(p);
+    for (const auto& p : lexer.GetErrorLog()) {
+        all_errors.push_back(p);
+    }
+    for (const auto& p : parser.GetErrorLog()) {
+        all_errors.push_back(p);
+    }
 
     std::unique_ptr<SemanticAnalyzer> analyzer;
     if (all_errors.empty() && comp_unit) {
         analyzer = std::make_unique<SemanticAnalyzer>();
         analyzer->Analyze(*comp_unit);
-        for (const auto& p : analyzer->GetErrors()) all_errors.push_back(p);
+        for (const auto& p : analyzer->GetErrorLog()) {
+            all_errors.push_back(p);
+        }
     }
 
     std::sort(all_errors.begin(), all_errors.end(),
@@ -47,7 +55,9 @@ int main() {
 
     if (!all_errors.empty()) {
         std::ofstream err("error.txt");
-        for (const auto& p : all_errors) err << p.first << " " << p.second << "\n";
+        for (const auto& p : all_errors) {
+            err << p.first << " " << p.second << "\n";
+        }
     } else if (analyzer) {
         std::ofstream out("symbol.txt");
         for (const auto& p : analyzer->GetOrderedSymbols()) {
