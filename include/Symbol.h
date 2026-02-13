@@ -49,7 +49,7 @@ struct Symbol {
     int scope_id;
 
     /** For constants: folded value (ConstExp evaluated to int). Empty for non-const. */
-    std::optional<int> const_value;
+    std::vector<int> const_values;
 
     /** For functions: param types (INT/CHAR, array flag). Empty for non-func. */
     std::vector<std::pair<BType, bool>> param_types;

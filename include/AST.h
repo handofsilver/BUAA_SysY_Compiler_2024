@@ -65,8 +65,13 @@ public:
     virtual void Accept(ASTVisitor& visitor) = 0;
 
     /** Source line (1-based). Parser should set for error reporting. Default 0. */
-    int GetLine() const { return line_; }
-    void SetLine(int line) { line_ = line; }
+    int GetLine() const {
+        return line_;
+    }
+
+    void SetLine(int line) {
+        line_ = line;
+    }
 
 protected:
     ASTNode() = default;
@@ -165,10 +170,10 @@ public:
 /** FuncRParams: Exp { ',' Exp }. */
 class FuncRParams : public ASTNode {
 public:
-    std::vector<std::unique_ptr<Exp>> func_r_params;
+    std::vector<std::unique_ptr<Exp>> exp_list;
 
-    explicit FuncRParams(std::vector<std::unique_ptr<Exp>> func_r_params) :
-    func_r_params(std::move(func_r_params)) {}
+    explicit FuncRParams(std::vector<std::unique_ptr<Exp>> exp_list) :
+    exp_list(std::move(exp_list)) {}
     ~FuncRParams() override = default;
 };
 

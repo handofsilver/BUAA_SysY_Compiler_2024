@@ -36,36 +36,36 @@ public:
     // -------------------------------------------------------------------------
     // ASTVisitor overrides (implemented in SemanticAnalyzer.cpp)
     // -------------------------------------------------------------------------
-    void VisitCompUnit(CompUnit& node) override;
-    void VisitConstDecl(ConstDecl& node) override;
-    void VisitVarDecl(VarDecl& node) override;
-    void VisitBlock(Block& node) override;
-    void VisitAssignStmt(AssignStmt& node) override;
-    void VisitExpStmt(ExpStmt& node) override;
-    void VisitBlockStmt(BlockStmt& node) override;
-    void VisitIfStmt(IfStmt& node) override;
-    void VisitForStmt(ForStmt& node) override;
-    void VisitBreakStmt(BreakStmt& node) override;
-    void VisitContinueStmt(ContinueStmt& node) override;
-    void VisitReturnStmt(ReturnStmt& node) override;
-    void VisitGetintStmt(GetintStmt& node) override;
-    void VisitGetcharStmt(GetcharStmt& node) override;
-    void VisitPrintfStmt(PrintfStmt& node) override;
-    void VisitLVal(LVal& node) override;
-    void VisitNumber(Number& node) override;
-    void VisitCharacter(Character& node) override;
-    void VisitBinaryExp(BinaryExp& node) override;
-    void VisitUnaryExp(UnaryExp& node) override;
-    void VisitFuncCall(FuncCall& node) override;
-    void VisitConstExp(ConstExp& node) override;
-    void VisitConstDef(ConstDef& node) override;
-    void VisitVarDef(VarDef& node) override;
-    void VisitFuncFParam(FuncFParam& node) override;
-    void VisitForInitOrStep(ForInitOrStep& node) override;
-    void VisitFuncDef(FuncDef& node) override;
-    void VisitMainFuncDef(MainFuncDef& node) override;
-    void VisitConstInitVal(ConstInitVal& node) override;
-    void VisitInitVal(InitVal& node) override;
+    void VisitCompUnit(CompUnit& comp_unit) override;
+    void VisitConstDecl(ConstDecl& const_decl) override;
+    void VisitVarDecl(VarDecl& var_decl) override;
+    void VisitBlock(Block& block) override;
+    void VisitAssignStmt(AssignStmt& assign_stmt) override;
+    void VisitExpStmt(ExpStmt& exp_stmt) override;
+    void VisitBlockStmt(BlockStmt& block_stmt) override;
+    void VisitIfStmt(IfStmt& if_stmt) override;
+    void VisitForStmt(ForStmt& for_stmt) override;
+    void VisitBreakStmt(BreakStmt& break_stmt) override;
+    void VisitContinueStmt(ContinueStmt& continue_stmt) override;
+    void VisitReturnStmt(ReturnStmt& return_stmt) override;
+    void VisitGetintStmt(GetintStmt& getint_stmt) override;
+    void VisitGetcharStmt(GetcharStmt& getchar_stmt) override;
+    void VisitPrintfStmt(PrintfStmt& printf_stmt) override;
+    void VisitLVal(LVal& lval) override;
+    void VisitNumber(Number& number) override;
+    void VisitCharacter(Character& character) override;
+    void VisitBinaryExp(BinaryExp& binary_exp) override;
+    void VisitUnaryExp(UnaryExp& unary_exp) override;
+    void VisitFuncCall(FuncCall& func_call) override;
+    void VisitConstExp(ConstExp& const_exp) override;
+    void VisitConstDef(ConstDef& const_def) override;
+    void VisitVarDef(VarDef& var_def) override;
+    void VisitFuncFParam(FuncFParam& func_f_param) override;
+    void VisitForInitOrStep(ForInitOrStep& for_init_or_step) override;
+    void VisitFuncDef(FuncDef& func_def) override;
+    void VisitMainFuncDef(MainFuncDef& main_func_def) override;
+    void VisitConstInitVal(ConstInitVal& const_init_val) override;
+    void VisitInitVal(InitVal& init_val) override;
 
 private:
     SymbolTable symbol_table_;
@@ -94,4 +94,16 @@ private:
     BType current_decl_btype_ = BType::INT;
     /** True when visiting LVal as left-hand side of assignment (then check const -> h). */
     bool lval_is_left_of_assign_ = false;
+
+    /** Last value calculated in constant folding. */
+    int last_value_ = 0;
+
+    /** Last values (e.g. const init list). */
+    std::vector<int> last_values_;
+
+    /**
+     * After visiting an Exp used as a function argument: true if that expression
+     * has array type (e.g. LVal without index, symbol is array). Used for error e.
+     */
+    bool current_exp_is_array_ = false;
 };

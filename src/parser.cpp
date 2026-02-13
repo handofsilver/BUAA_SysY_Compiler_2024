@@ -395,8 +395,13 @@ std::unique_ptr<Block> Parser::ParseBlock() {
         block_items.push_back(ParseBlockItem());
     }
     Expect(TokenType::RBRACE, "");
+
+    // set the line number of the block, used in semantic analysis
+    auto block = std::make_unique<Block>(std::move(block_items));
+    block->SetLine(last_consumed_line_);
+
     EmitSyntax("<Block>");
-    return std::make_unique<Block>(std::move(block_items));
+    return block;
 }
 
 /** BlockItem -> Decl | Stmt. */
