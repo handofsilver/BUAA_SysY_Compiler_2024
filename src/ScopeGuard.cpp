@@ -6,5 +6,7 @@ ScopeGuard::ScopeGuard(SymbolTable& table) : table_(&table) {
 }
 
 ScopeGuard::~ScopeGuard() {
-    if (table_) table_->PopScope();
+    if (table_) {
+        table_->PopScope();
+    }
 }

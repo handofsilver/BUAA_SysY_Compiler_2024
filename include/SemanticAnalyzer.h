@@ -5,6 +5,7 @@
 #include "ScopeGuard.h"
 #include "Symbol.h"
 #include "SymbolTable.h"
+#include <string_view>
 #include <vector>
 
 /**
@@ -57,6 +58,7 @@ public:
     void VisitBinaryExp(BinaryExp& binary_exp) override;
     void VisitUnaryExp(UnaryExp& unary_exp) override;
     void VisitFuncCall(FuncCall& func_call) override;
+    void VisitFuncRParams(FuncRParams& func_r_params) override;
     void VisitConstExp(ConstExp& const_exp) override;
     void VisitConstDef(ConstDef& const_def) override;
     void VisitVarDef(VarDef& var_def) override;
@@ -73,8 +75,8 @@ private:
     /** Appended on each successful Register; used for symbol.txt output. */
     SymbolTable::OrderedSymbolList ordered_symbols_;
 
-    /** Record semantic error (line, error_code e.g. "b", "c"). */
-    void RecordError(int line, const std::string& code);
+    /** Record semantic error (line, error_code e.g. "b", "c"). Line is 1-based; <=0 is clamped to 1. */
+    void RecordError(int line, std::string_view code);
 
     /**
      * Register symbol in current scope and append to ordered_symbols_ for output.

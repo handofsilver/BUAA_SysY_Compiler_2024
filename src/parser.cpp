@@ -190,6 +190,7 @@ std::unique_ptr<VarDecl> Parser::ParseVarDecl() {
 
 /** ConstDef -> Ident [ '[' ConstExp ']' ] '=' ConstInitVal. Grammar: at most one dimension. */
 std::unique_ptr<ConstDef> Parser::ParseConstDef() {
+    int line_num = Cur()->line_num;
     std::string ident = Cur()->value;
     Expect(TokenType::IDENFR, "");
     std::optional<std::unique_ptr<ConstExp>> array_size;
@@ -201,12 +202,15 @@ std::unique_ptr<ConstDef> Parser::ParseConstDef() {
     Expect(TokenType::ASSIGN, "");
     std::unique_ptr<ConstInitVal> const_init_val = ParseConstInitVal();
     EmitSyntax("<ConstDef>");
-    return std::make_unique<ConstDef>(std::move(ident), std::move(array_size),
-                                      std::move(const_init_val));
+    std::unique_ptr<ConstDef> const_def = std::make_unique<ConstDef>(
+        std::move(ident), std::move(array_size), std::move(const_init_val));
+    const_def->SetLine(line_num);
+    return const_def;
 }
 
 /** VarDef -> Ident [ '[' ConstExp ']' ] [ '=' InitVal ]. Grammar: at most one dimension. */
 std::unique_ptr<VarDef> Parser::ParseVarDef() {
+    int line_num = Cur()->line_num;
     std::string ident = Cur()->value;
     Expect(TokenType::IDENFR, "");
     std::optional<std::unique_ptr<ConstExp>> array_size;
@@ -221,7 +225,10 @@ std::unique_ptr<VarDef> Parser::ParseVarDef() {
         init_val = ParseInitVal();
     }
     EmitSyntax("<VarDef>");
-    return std::make_unique<VarDef>(std::move(ident), std::move(array_size), std::move(init_val));
+    std::unique_ptr<VarDef> var_def =
+        std::make_unique<VarDef>(std::move(ident), std::move(array_size), std::move(init_val));
+    var_def->SetLine(line_num);
+    return var_def;
 }
 
 /** ConstInitVal -> ConstExp | '{' [ ConstExp { ',' ConstExp } ] '}' | StringConst. */
@@ -342,6 +349,7 @@ std::vector<std::unique_ptr<FuncFParam>> Parser::ParseFuncFParams() {
 /** FuncFParam -> BType Ident ['[' ']']. */
 std::unique_ptr<FuncFParam> Parser::ParseFuncFParam() {
     BType btype = ParseBType();
+    int line_num = Cur()->line_num;
     std::string ident = Cur()->value;
     Expect(TokenType::IDENFR, "");
     bool is_array = false;
@@ -351,7 +359,10 @@ std::unique_ptr<FuncFParam> Parser::ParseFuncFParam() {
         is_array = true;
     }
     EmitSyntax("<FuncFParam>");
-    return std::make_unique<FuncFParam>(btype, std::move(ident), is_array);
+    std::unique_ptr<FuncFParam> func_f_param =
+        std::make_unique<FuncFParam>(btype, std::move(ident), is_array);
+    func_f_param->SetLine(line_num);
+    return func_f_param;
 }
 
 // -------------------------------------------------------------------------
@@ -361,6 +372,7 @@ std::unique_ptr<FuncFParam> Parser::ParseFuncFParam() {
 /** FuncDef -> FuncType Ident '(' [FuncFParams] ')' Block. */
 std::unique_ptr<FuncDef> Parser::ParseFuncDef() {
     BType b_type = ParseFuncType();
+    int line_num = Cur()->line_num;
     std::string ident = Cur()->value;
     Expect(TokenType::IDENFR, "");
     Expect(TokenType::LPARENT, "");
@@ -368,8 +380,10 @@ std::unique_ptr<FuncDef> Parser::ParseFuncDef() {
     ExpectRightParen();
     std::unique_ptr<Block> block = ParseBlock();
     EmitSyntax("<FuncDef>");
-    return std::make_unique<FuncDef>(b_type, std::move(ident), std::move(func_f_params),
-                                     std::move(block));
+    std::unique_ptr<FuncDef> func_def = std::make_unique<FuncDef>(
+        b_type, std::move(ident), std::move(func_f_params), std::move(block));
+    func_def->SetLine(line_num);
+    return func_def;
 }
 
 /** MainFuncDef -> 'int' 'main' '(' ')' Block. */
@@ -502,36 +516,47 @@ std::unique_ptr<ForStmt> Parser::ParseForStmt() {
 
 /** BreakStmt -> 'break' ';' */
 std::unique_ptr<BreakStmt> Parser::ParseBreakStmt() {
+    std::unique_ptr<BreakStmt> break_stmt = std::make_unique<BreakStmt>();
+    break_stmt->SetLine(Cur()->line_num);
     Advance();
     ExpectSemicolon();
     EmitSyntax("<Stmt>");
-    return std::make_unique<BreakStmt>();
+    return break_stmt;
 }
 
 /** ContinueStmt -> 'continue' ';' */
 std::unique_ptr<ContinueStmt> Parser::ParseContinueStmt() {
+    std::unique_ptr<ContinueStmt> continue_stmt = std::make_unique<ContinueStmt>();
+    continue_stmt->SetLine(Cur()->line_num);
     Advance();
     ExpectSemicolon();
     EmitSyntax("<Stmt>");
-    return std::make_unique<ContinueStmt>();
+    return continue_stmt;
 }
 
 /** ReturnStmt -> 'return' [Exp] ';' */
 std::unique_ptr<ReturnStmt> Parser::ParseReturnStmt() {
+    int line_num = Cur()->line_num;
     Advance();
     if (CurIs(TokenType::SEMICN)) {
         Advance();
         EmitSyntax("<Stmt>");
-        return std::make_unique<ReturnStmt>(std::nullopt);
+        std::unique_ptr<ReturnStmt> return_stmt = std::make_unique<ReturnStmt>(std::nullopt);
+        return_stmt->SetLine(line_num);
+        return return_stmt;
     }
     std::unique_ptr<Exp> exp = ParseExp();
     ExpectSemicolon();
     EmitSyntax("<Stmt>");
-    return std::make_unique<ReturnStmt>(std::move(exp));
+
+    std::unique_ptr<ReturnStmt> return_stmt = std::make_unique<ReturnStmt>(std::move(exp));
+    return_stmt->SetLine(line_num);
+    return return_stmt;
 }
 
 /** PrintfStmt -> 'printf' '(' StringConst { ',' Exp } ')' ';' */
 std::unique_ptr<PrintfStmt> Parser::ParsePrintfStmt() {
+    int line_num = Cur()->line_num;
     Advance();
     Expect(TokenType::LPARENT, "");
     std::string format_string = Cur()->value;
@@ -544,7 +569,11 @@ std::unique_ptr<PrintfStmt> Parser::ParsePrintfStmt() {
     ExpectRightParen();
     ExpectSemicolon();
     EmitSyntax("<Stmt>");
-    return std::make_unique<PrintfStmt>(std::move(format_string), std::move(exps));
+
+    std::unique_ptr<PrintfStmt> printf_stmt =
+        std::make_unique<PrintfStmt>(std::move(format_string), std::move(exps));
+    printf_stmt->SetLine(line_num);
+    return printf_stmt;
 }
 
 /** ExpStmt -> [Exp] ';'. GetintStmt / GetcharStmt / AssignStmt via LVal '=' ... */
@@ -629,10 +658,7 @@ std::unique_ptr<Exp> Parser::ParseCond() {
 
 /** LVal -> Ident ['[' Exp ']']. */
 std::unique_ptr<LVal> Parser::ParseLVal() {
-    if (!Cur().has_value()) {
-        RecordError(0, "?");
-        return std::make_unique<LVal>("");
-    }
+    int line_num = Cur()->line_num;
     std::string ident = Cur()->value;
     Advance();
     if (CurIs(TokenType::LBRACK)) {
@@ -640,10 +666,14 @@ std::unique_ptr<LVal> Parser::ParseLVal() {
         std::unique_ptr<Exp> exp = ParseExp();
         ExpectRightBracket();
         EmitSyntax("<LVal>");
-        return std::make_unique<LVal>(std::move(ident), std::move(exp));
+        std::unique_ptr<LVal> lval = std::make_unique<LVal>(std::move(ident), std::move(exp));
+        lval->SetLine(line_num);
+        return lval;
     }
     EmitSyntax("<LVal>");
-    return std::make_unique<LVal>(std::move(ident));
+    std::unique_ptr<LVal> lval = std::make_unique<LVal>(std::move(ident));
+    lval->SetLine(line_num);
+    return lval;
 }
 
 /** PrimaryExp -> '(' Exp ')' | LVal | Number | Character. */
@@ -709,13 +739,17 @@ std::unique_ptr<Exp> Parser::ParseMulExp() {
 /** UnaryExp -> PrimaryExp | Ident '(' [FuncRParams] ')' | UnaryOp UnaryExp. */
 std::unique_ptr<Exp> Parser::ParseUnaryExp() {
     if (CurIs(TokenType::IDENFR) && LookaheadIs(TokenType::LPARENT)) {
+        int line_num = Cur()->line_num;
         std::string ident = Cur()->value;
         Advance();
         Advance();
         std::unique_ptr<FuncRParams> func_r_params = ParseFuncRParams();
         ExpectRightParen();
         EmitSyntax("<UnaryExp>");
-        return std::make_unique<FuncCall>(std::move(ident), std::move(func_r_params));
+        std::unique_ptr<FuncCall> func_call =
+            std::make_unique<FuncCall>(std::move(ident), std::move(func_r_params));
+        func_call->SetLine(line_num);
+        return func_call;
     }
     if (CurIs(TokenType::PLUS) || CurIs(TokenType::MINU) || CurIs(TokenType::NOT)) {
         OpType op = ParseUnaryOp();

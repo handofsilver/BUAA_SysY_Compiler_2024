@@ -174,6 +174,7 @@ public:
 
     explicit FuncRParams(std::vector<std::unique_ptr<Exp>> exp_list) :
     exp_list(std::move(exp_list)) {}
+    void Accept(ASTVisitor& visitor) override;
     ~FuncRParams() override = default;
 };
 

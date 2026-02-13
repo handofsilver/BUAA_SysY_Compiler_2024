@@ -10,18 +10,6 @@
 
 namespace {
 
-    BType ToBType(SymbolType t) {
-        if (t == SymbolType::INT || t == SymbolType::INT_FUNC || t == SymbolType::CONST_INT ||
-            t == SymbolType::INT_ARRAY || t == SymbolType::CONST_INT_ARRAY) {
-            return BType::INT;
-        }
-        if (t == SymbolType::CHAR || t == SymbolType::CHAR_FUNC || t == SymbolType::CONST_CHAR ||
-            t == SymbolType::CHAR_ARRAY || t == SymbolType::CONST_CHAR_ARRAY) {
-            return BType::CHAR;
-        }
-        return BType::VOID;
-    }
-
     SymbolType BTypeToConstScalar(BType b) {
         return b == BType::INT ? SymbolType::CONST_INT : SymbolType::CONST_CHAR;
     }
@@ -47,14 +35,13 @@ namespace {
 } // namespace
 
 bool SemanticAnalyzer::Analyze(CompUnit& root) {
-    symbol_table_.PushScope(); // global scope id = 1
+    ScopeGuard guard(symbol_table_); // global scope; pop on return/exception
     root.Accept(*this);
-    symbol_table_.PopScope();
     return error_log_.empty();
 }
 
-void SemanticAnalyzer::RecordError(int line, const std::string& code) {
-    error_log_.emplace_back(line, code);
+void SemanticAnalyzer::RecordError(int line, std::string_view code) {
+    error_log_.emplace_back(line <= 0 ? 1 : line, std::string(code));
 }
 
 bool SemanticAnalyzer::RegisterSymbol(const std::string& name, Symbol symbol, int line) {
@@ -68,12 +55,16 @@ bool SemanticAnalyzer::RegisterSymbol(const std::string& name, Symbol symbol, in
     return true;
 }
 
+// Visit block items only, no scope push. Used by FuncDef/MainFuncDef so the function body
+// shares the same scope as params (one scope per function); calling block->Accept would push
+// an extra scope.
 void SemanticAnalyzer::VisitBlockContents(Block& block) {
     for (auto& item : block.block_items) {
         item->Accept(*this);
     }
 
-    // g: 有返回值的函数缺少 return；报错行号为函数结尾的 `}` 所在行（Block 应由 Parser 设该行号）
+    // Error "g": non-void function must have return. Line number is the block's line
+    // (last `}` of the function), per spec; Parser must set Block::line_ accordingly.
     if (current_func_type_ != BType::VOID) {
         bool has_return_at_end = false;
         if (!block.block_items.empty()) {
@@ -145,12 +136,12 @@ void SemanticAnalyzer::VisitFuncDef(FuncDef& func_def) {
     for (const auto& p : func_def.func_f_params) {
         sym.param_types.push_back({p->btype, p->is_array});
     }
-    if (!RegisterSymbol(func_def.ident, sym, line)) {
-        return;
-    }
+    RegisterSymbol(func_def.ident, sym, line);
 
-    ScopeGuard guard(symbol_table_); // one scope for params + body (requirement:
-                                     // 函数的参数属于函数内部的作用域)
+    // Requirement: redefined functions should also be fully analyzed to collect other errors,
+    // so we don't return here
+
+    ScopeGuard guard(symbol_table_);
     BType prev_func = current_func_type_;
     current_func_type_ = func_def.func_type;
 
@@ -324,21 +315,21 @@ void SemanticAnalyzer::VisitGetcharStmt(GetcharStmt& getchar_stmt) {
 }
 
 void SemanticAnalyzer::VisitPrintfStmt(PrintfStmt& printf_stmt) {
-    int exp_count = 0;
     for (auto& e : printf_stmt.exp_list) {
         e->Accept(*this);
-        exp_count++;
     }
 
-    int format_count = 0; // the count of %c %d in format string
-    for (size_t i = 0; i < printf_stmt.format_string.size() - 1; i++) {
-        if (printf_stmt.format_string[i] == '%' &&
-            (printf_stmt.format_string[i + 1] == 'c' || printf_stmt.format_string[i + 1] == 'd')) {
+    size_t format_count = 0;
+    const std::string& fmt = printf_stmt.format_string;
+    for (size_t i = 0; i + 1 < fmt.size(); ++i) {
+        if (fmt[i] == '%' && (fmt[i + 1] == '%')) {
+            i++;
+        } else if (fmt[i] == '%' && (fmt[i + 1] == 'c' || fmt[i + 1] == 'd')) {
             format_count++;
         }
     }
 
-    if (exp_count != format_count) {
+    if (printf_stmt.exp_list.size() != format_count) {
         RecordError(printf_stmt.GetLine(), "l");
     }
 }
@@ -370,11 +361,13 @@ void SemanticAnalyzer::VisitLVal(LVal& lval) {
         lval.index->Accept(*this);
     }
 
-    // 作为实参时的类型：无下标且符号为数组 → 数组类型；否则为标量
+    // The type of the expression when used as an argument: no index and symbol is array type;
+    // otherwise scalar
     if (!lval_is_left_of_assign_) {
         current_exp_is_array_ = IsArray(sym->type) && !lval.index;
     }
 
+    // Constant folding: when used as value, const symbol yields last_value_ for ConstExp eval.
     if (IsConst(sym->type) && !lval_is_left_of_assign_ && !sym->const_values.empty()) {
         if (sym->array_size.has_value()) {
             size_t idx = static_cast<size_t>(last_value_);
@@ -397,6 +390,7 @@ void SemanticAnalyzer::VisitCharacter(Character& character) {
     current_exp_is_array_ = false;
 }
 
+// Constant folding: evaluate at visit time so ConstExp/array size get last_value_.
 void SemanticAnalyzer::VisitBinaryExp(BinaryExp& binary_exp) {
     if (binary_exp.lhs) {
         binary_exp.lhs->Accept(*this);
@@ -409,7 +403,7 @@ void SemanticAnalyzer::VisitBinaryExp(BinaryExp& binary_exp) {
     }
 
     int right = last_value_;
-    current_exp_is_array_ = false; // 运算结果为标量
+    current_exp_is_array_ = false; // the result of the operation is a scalar
     last_value_ = binary_exp.op == OpType::PLUS ? left + right :
                   binary_exp.op == OpType::MINU ? left - right :
                   binary_exp.op == OpType::MUL  ? left * right :
@@ -463,13 +457,21 @@ void SemanticAnalyzer::VisitFuncCall(FuncCall& func_call) {
         RecordError(func_call.GetLine(), "d");
     }
 
+    // Compare formal (param_types) vs actual (actual_is_array): scalar/array must match (error
+    // "e").
     for (size_t i = 0; i < param_count && i < sym->param_types.size(); ++i) {
         if (actual_is_array[i] != sym->param_types[i].second) {
             RecordError(func_call.GetLine(), "e");
             break;
         }
     }
-    current_exp_is_array_ = false; // 函数调用结果为标量
+    current_exp_is_array_ = false; // the result of the function call is a scalar
+}
+
+void SemanticAnalyzer::VisitFuncRParams(FuncRParams& func_r_params) {
+    for (auto& exp : func_r_params.exp_list) {
+        exp->Accept(*this);
+    }
 }
 
 void SemanticAnalyzer::VisitConstExp(ConstExp& const_exp) {
