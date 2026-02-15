@@ -189,6 +189,33 @@ namespace ir {
             return Create<GetElementPtrInst>("", result_ptr_type, bb, base, index0, index1);
         }
 
+        /** @brief Create icmp: result is i1. Pass GetI1Type() from Module as result_type. */
+        Instruction* CreateIcmp(Type* result_type, IcmpPred pred, Value* lhs, Value* rhs) {
+            BasicBlock* bb = GetInsertBlock();
+            if (!bb || !result_type || !lhs || !rhs) {
+                return nullptr;
+            }
+            return Create<IcmpInst>("", result_type, bb, pred, lhs, rhs);
+        }
+
+        /** @brief Create zext from value to dest_type (e.g. i1 to i32). */
+        Instruction* CreateZext(Value* value, Type* dest_type) {
+            BasicBlock* bb = GetInsertBlock();
+            if (!bb || !value || !dest_type) {
+                return nullptr;
+            }
+            return Create<ZextInst>("", dest_type, bb, value);
+        }
+
+        /** @brief Create trunc from value to dest_type (e.g. i32 to i8). */
+        Instruction* CreateTrunc(Value* value, Type* dest_type) {
+            BasicBlock* bb = GetInsertBlock();
+            if (!bb || !value || !dest_type) {
+                return nullptr;
+            }
+            return Create<TruncInst>("", dest_type, bb, value);
+        }
+
     private:
         BasicBlock* insert_point_ = nullptr;
     };

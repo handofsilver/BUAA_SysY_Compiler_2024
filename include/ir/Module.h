@@ -9,19 +9,21 @@
 #ifndef IR_MODULE_H
 #define IR_MODULE_H
 
+#include "ir/Constant.h"
 #include "ir/Function.h"
 #include "ir/GlobalVar.h"
+#include "ir/Type.h"
 
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 namespace ir {
 
     /**
-     * @brief Top-level IR container: globals and functions.
+     * @brief Top-level IR container: globals, functions, and constant pool.
      *
-     * Ownership: Module owns all GlobalVar and Function objects
-     * (vectors of unique_ptr). No one else owns these.
+     * Ownership: Module owns all GlobalVar, Function, and ConstantInt objects.
      */
     class Module {
     public:
@@ -43,9 +45,26 @@ namespace ir {
             return functions_;
         }
 
+        /** @brief Common types (owned here). */
+        IntegerType* GetI32Type();
+        IntegerType* GetI8Type();
+        IntegerType* GetI1Type();
+
+        /**
+         * @brief Get or create an i32 constant. Returned pointer is valid for module lifetime.
+         */
+        ConstantInt* GetInt32Constant(int64_t value);
+
+        /** Out-of-line destructor so TUs that only see Module do not need to destroy Instruction.
+         */
+        ~Module();
+
     private:
         std::vector<std::unique_ptr<GlobalVar>> global_vars_;
         std::vector<std::unique_ptr<Function>> functions_;
+        std::vector<std::unique_ptr<IntegerType>> integer_types_;
+        std::vector<std::unique_ptr<ConstantInt>> constants_;
+        std::unordered_map<int64_t, ConstantInt*> const_i32_cache_;
     };
 
 } // namespace ir

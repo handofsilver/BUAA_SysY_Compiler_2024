@@ -14,19 +14,37 @@
 
 namespace ir {
 
-/**
- * @brief Base class for all constant values in the IR.
- *
- * Constants are Users (they may have operands, e.g. constant expressions).
- * Subclasses: GlobalVar, Function, and possibly ConstantInt, etc.
- */
-class Constant : public User {
- public:
-  Constant() = default;
-  Constant(const std::string& name, Type* type) : User(name, type) {}
-  virtual ~Constant() = default;
-};
+    /**
+     * @brief Base class for all constant values in the IR.
+     *
+     * Constants are Users (they may have operands, e.g. constant expressions).
+     * Subclasses: GlobalVar, Function, ConstantInt.
+     */
+    class Constant : public User {
+    public:
+        Constant() = default;
+        Constant(const std::string& name, Type* type) : User(name, type) {}
+        virtual ~Constant() = default;
+    };
 
-}  // namespace ir
+    /**
+     * @brief Integer constant (e.g. i32 0, i8 97). Not an instruction; used as operands.
+     * Ownership: typically held by Module's constant pool.
+     */
+    class ConstantInt : public Constant {
+    public:
+        ConstantInt() : value_(0) {}
+        ConstantInt(const std::string& name, Type* type, int64_t value) :
+        Constant(name, type),
+        value_(value) {}
 
-#endif  // IR_CONSTANT_H
+        int64_t GetValue() const {
+            return value_;
+        }
+
+    private:
+        int64_t value_;
+    };
+} // namespace ir
+
+#endif // IR_CONSTANT_H

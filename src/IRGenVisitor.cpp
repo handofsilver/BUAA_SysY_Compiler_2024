@@ -7,12 +7,29 @@
  */
 #include "IRGenVisitor.h"
 #include "AST.h"
+#include "ir/Instruction.h"
+#include <optional>
 
 namespace {
 
-    // Optional: include IR instruction headers if you need concrete types in this file.
-    // #include "ir/Instruction.h"
-    // #include "ir/Type.h"
+    /** Map comparison OpType to LLVM icmp predicate (for VisitBinaryExp). */
+    std::optional<ir::IcmpPred> OpTypeToIcmpPred(OpType op) {
+        switch (op) {
+            case OpType::LT: return ir::IcmpPred::SLT;
+            case OpType::GT: return ir::IcmpPred::SGT;
+            case OpType::LE: return ir::IcmpPred::SLE;
+            case OpType::GE: return ir::IcmpPred::SGE;
+            case OpType::EQ: return ir::IcmpPred::EQ;
+            case OpType::NE: return ir::IcmpPred::NE;
+            default: return std::nullopt;
+        }
+    }
+
+    /** True if OpType is arithmetic (add/sub/mul/div/mod). */
+    bool IsArithmeticOp(OpType op) {
+        return op == OpType::ADD || op == OpType::SUB || op == OpType::MUL || op == OpType::DIV ||
+               op == OpType::MOD;
+    }
 
 } // namespace
 
@@ -61,8 +78,19 @@ void IRGenVisitor::PopScope() {
 // -----------------------------------------------------------------------------
 
 void IRGenVisitor::VisitCompUnit(CompUnit& comp_unit) {
-    // Implement (exercise): Set is_global_ = true, push global scope. Iterate decls and func defs,
-    // call Accept() on each. Optionally declare I/O (getint, getchar, putint, putch, putstr).
+    is_global_ = true;
+    PushScope();
+    for (auto& d : comp_unit.decls) {
+        d->Accept(*this);
+    }
+    for (auto& f : comp_unit.func_defs) {
+        f->Accept(*this);
+    }
+    if (comp_unit.main_func_def) {
+        comp_unit.main_func_def->Accept(*this);
+    }
+    PopScope();
+    is_global_ = false;
 }
 
 void IRGenVisitor::VisitConstDecl(ConstDecl& const_decl) {
@@ -124,8 +152,15 @@ void IRGenVisitor::VisitBlockStmt(BlockStmt& block_stmt) {
 }
 
 void IRGenVisitor::VisitAssignStmt(AssignStmt& assign_stmt) {
-    // Implement (exercise): Set is_lval_mode_ = true, visit LVal (get address). Set is_lval_mode_ =
-    // false, visit Exp (get value). Create store value -> address.
+    is_lval_mode_ = true;
+    assign_stmt.lval->Accept(*this);
+    ir::Value* addr = temp_value_;
+    is_lval_mode_ = false;
+    assign_stmt.exp->Accept(*this);
+    ir::Value* val = temp_value_;
+    if (addr && val && builder_->GetInsertBlock()) {
+        builder_->CreateStore(val, addr);
+    }
 }
 
 void IRGenVisitor::VisitExpStmt(ExpStmt& exp_stmt) {
@@ -184,7 +219,7 @@ void IRGenVisitor::VisitLVal(LVal& lval) {
 }
 
 void IRGenVisitor::VisitNumber(Number& number) {
-    // Implement (exercise): Create constant (or use pre-built i32 constant), set temp_value_.
+    temp_value_ = module_->GetInt32Constant(number.int_const);
 }
 
 void IRGenVisitor::VisitCharacter(Character& character) {
@@ -192,9 +227,29 @@ void IRGenVisitor::VisitCharacter(Character& character) {
 }
 
 void IRGenVisitor::VisitBinaryExp(BinaryExp& binary_exp) {
-    // Implement (exercise): Visit lhs and rhs (recursively or via sub-expressions), then
-    // CreateBinary(op, lhs, rhs); set temp_value_ to result. For comparison, use icmp and possibly
-    // zext i1 to i32.
+    binary_exp.lhs->Accept(*this);
+    ir::Value* lhs = temp_value_;
+    binary_exp.rhs->Accept(*this);
+    ir::Value* rhs = temp_value_;
+    if (!lhs || !rhs || !builder_->GetInsertBlock()) {
+        return;
+    }
+    OpType op = binary_exp.op;
+    if (IsArithmeticOp(op)) {
+        ir::Instruction* inst = builder_->CreateBinary(op, lhs, rhs);
+        temp_value_ = inst ? inst : temp_value_;
+        return;
+    }
+    std::optional<ir::IcmpPred> pred = OpTypeToIcmpPred(op);
+    if (pred) {
+        ir::Instruction* cmp = builder_->CreateIcmp(module_->GetI1Type(), *pred, lhs, rhs);
+        if (cmp) {
+            ir::Instruction* zext = builder_->CreateZext(cmp, module_->GetI32Type());
+            temp_value_ = zext ? zext : cmp;
+        }
+        return;
+    }
+    // AND / OR (short-circuit) require control flow; extend when implementing Cond.
 }
 
 void IRGenVisitor::VisitUnaryExp(UnaryExp& unary_exp) {
