@@ -40,20 +40,23 @@ namespace ir {
          * @return nullptr if i is out of range.
          */
         Value* GetOperand(int i) const {
-            if (i < 0 || static_cast<size_t>(i) >= operands_.size())
+            if (i < 0 || static_cast<size_t>(i) >= operands_.size()) {
                 return nullptr;
+            }
             return operands_[static_cast<size_t>(i)].GetValue();
         }
 
         /**
-         * @brief Set operand i to val. Does not update use lists.
-         * TODO: caller is responsible for add_use/remove_use if needed.
+         * @brief Resize operand vector to n slots. New slots are bound to this User.
+         * Call this before SetOperand when constructing instructions with a fixed operand count
+         * to avoid iteration invalidation (resize once, then set by index).
          */
-        void SetOperand(int i, Value* val) {
-            if (i >= 0 && static_cast<size_t>(i) < operands_.size()) {
-                operands_[static_cast<size_t>(i)].SetValue(val);
-            }
-        }
+        void ResizeOperands(size_t n);
+
+        /**
+         * @brief Set operand i to val. Updates use lists (remove from old value, add to new).
+         */
+        void SetOperand(int i, Value* val);
 
         /** @brief Direct access to the operand storage (for construction / iteration). */
         std::vector<Use>& GetOperands() {

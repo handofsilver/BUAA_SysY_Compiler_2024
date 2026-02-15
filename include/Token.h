@@ -9,6 +9,8 @@ struct Token {
     int line_num;
     std::string value;
 
-    Token(TokenType t, int line, std::string value) : type(t), line_num(line), value(std::move(value)) {
-    }
+    Token(TokenType t, int line, std::string value) :
+    type(t),
+    line_num(line),
+    value(std::move(value)) {}
 };

@@ -75,7 +75,8 @@ private:
     /** Appended on each successful Register; used for symbol.txt output. */
     SymbolTable::OrderedSymbolList ordered_symbols_;
 
-    /** Record semantic error (line, error_code e.g. "b", "c"). Line is 1-based; <=0 is clamped to 1. */
+    /** Record semantic error (line, error_code e.g. "b", "c"). Line is 1-based; <=0 is clamped
+     * to 1. */
     void RecordError(int line, std::string_view code);
 
     /**

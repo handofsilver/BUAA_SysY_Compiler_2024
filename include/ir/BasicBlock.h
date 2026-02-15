@@ -9,13 +9,12 @@
 #ifndef IR_BASICBLOCK_H
 #define IR_BASICBLOCK_H
 
-#include "ir/Instruction.h"
 #include "ir/Value.h"
-
 #include <list>
 #include <memory>
 
 namespace ir {
+    class Instruction;
 
     /**
      * @brief A basic block: linear sequence of instructions, single entry, single exit.
@@ -27,14 +26,14 @@ namespace ir {
     public:
         BasicBlock() = default;
         explicit BasicBlock(const std::string& name) : Value(name, nullptr) {}
+        ~BasicBlock();  // defined in .cpp so Instruction is complete when destroying list<unique_ptr<Instruction>>
 
         /** @brief Get the list of instructions (ownership held here). */
-        std::list<std::unique_ptr<Instruction>>& GetInstructions() {
-            return instructions_;
-        }
-        const std::list<std::unique_ptr<Instruction>>& GetInstructions() const {
-            return instructions_;
-        }
+        std::list<std::unique_ptr<Instruction>>& GetInstructions();
+        const std::list<std::unique_ptr<Instruction>>& GetInstructions() const;
+
+        /** @brief Append instruction to this block; sets inst's parent to this. */
+        void AddInstruction(std::unique_ptr<Instruction> inst);
 
     private:
         std::list<std::unique_ptr<Instruction>> instructions_;
