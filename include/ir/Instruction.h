@@ -178,6 +178,9 @@ namespace ir {
             ResizeOperands(1);
             SetOperand(0, ret_val);
         }
+        /** @brief Constructor for ret void (no operands). */
+        ReturnInst(const std::string& name, Type* type, BasicBlock* parent) :
+        Instruction(name, type, parent) {}
         Value* GetRetVal() const {
             return GetNumOperands() > 0 ? GetOperand(0) : nullptr;
         }
@@ -194,11 +197,21 @@ namespace ir {
             SetOperand(0, base);
             SetOperand(1, index);
         }
+        /** @brief Two indices (e.g. for [N x T]: base, i32 0, i32 %idx). */
+        GetElementPtrInst(const std::string& name, Type* type, BasicBlock* parent, Value* base,
+                          Value* index0, Value* index1) :
+        Instruction(name, type, parent) {
+            ResizeOperands(3);
+            SetOperand(0, base);
+            SetOperand(1, index0);
+            SetOperand(2, index1);
+        }
         Value* GetPointerOperand() const {
             return GetOperand(0);
         }
-        Value* GetIndex() const {
-            return GetOperand(1);
+        Value* GetIndex(int i = 0) const {
+            size_t idx = static_cast<size_t>(i);
+            return GetNumOperands() > 1u + idx ? GetOperand(1 + i) : nullptr;
         }
     };
 

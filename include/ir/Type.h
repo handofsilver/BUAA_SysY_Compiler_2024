@@ -122,6 +122,14 @@ namespace ir {
         LabelType() : Type(TypeID::LabelTyID) {}
     };
 
+    /**
+     * @brief Returns the canonical void type (singleton). Used e.g. for ret void.
+     */
+    inline Type* GetVoidType() {
+        static VoidType v;
+        return &v;
+    }
+
 } // namespace ir
 
 #endif // IR_TYPE_H
