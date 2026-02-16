@@ -149,11 +149,7 @@ htmlcov/
 # 7. 自定义忽略 (Local Overrides)
 # ====================================================================
 # 如果有个人专属的本地排除规则，可以写在这里
-**/testfile.txt
-**/in.txt
-**/out.txt
-**/error.txt
-**/lexer.txt
-**/parser.txt
-**/temp.txt
-**/log.txt
+*.txt
+**/.vscode
+**/.specstory
+**/testcases

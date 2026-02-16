@@ -21,8 +21,8 @@ class IRGenVisitor : public ASTVisitor {
 public:
     IRGenVisitor();
 
-    /** @brief Take ownership of the generated module (e.g. for printing or further passes). */
-    std::unique_ptr<ir::Module> GetModule();
+    /** @brief Translate the given CompUnit into an LLVM IR Module. */
+    std::unique_ptr<ir::Module> Translate(CompUnit& comp_unit);
 
     // -------------------------------------------------------------------------
     // ASTVisitor overrides
@@ -59,6 +59,12 @@ public:
     void VisitMainFuncDef(MainFuncDef& main_func_def) override;
     void VisitConstInitVal(ConstInitVal& const_init_val) override;
     void VisitInitVal(InitVal& init_val) override;
+
+    /** @brief Push a new scope (e.g. on entering a block). */
+    void PushScope();
+
+    /** @brief Pop the current scope (e.g. on leaving a block). */
+    void PopScope();
 
 private:
     // -------------------------------------------------------------------------
@@ -117,11 +123,8 @@ private:
     int current_scope_id_ = 0;
 
     /** @brief Look up a variable by name in the scope chain (inner to outer). */
-    ir::Value* LookupVariable(const std::string& name);
+    ir::Value* LookupVariable(const std::string& name) const;
 
-    /** @brief Push a new scope (e.g. on entering a block). */
-    void PushScope();
-
-    /** @brief Pop the current scope (e.g. on leaving a block). */
-    void PopScope();
+    /** @brief Register a variable in the current scope. */
+    void RegisterVariable(const std::string& name, ir::Value* value);
 };

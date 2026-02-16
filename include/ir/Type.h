@@ -67,10 +67,10 @@ namespace ir {
         Type(TypeID::PointerTyID),
         pointee_type_(pointee_type) {}
 
-        Type* GetPointerType() const {
+        Type* GetPointeeType() const {
             return pointee_type_;
         }
-        void SetPointerType(Type* t) {
+        void SetPointeeType(Type* t) {
             pointee_type_ = t;
         }
 

@@ -59,7 +59,7 @@
 条件表达式 Cond       → LOrExp
 左值表达式 LVal       → Ident ['[' Exp ']'] // c, k
 基本表达式 PrimaryExp → '(' Exp ')' | LVal | Number | Character // j
-一元表达式 UnaryExp   → PrimaryExp 
+一元表达式 UnaryExp   → PrimaryExp
                       | Ident '(' [FuncRParams] ')' // c, d, e, j
                       | UnaryOp UnaryExp
 ```

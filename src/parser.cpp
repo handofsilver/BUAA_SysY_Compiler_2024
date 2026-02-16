@@ -5,7 +5,7 @@
 #include <unordered_map>
 
 OpType GetOperatorType(std::string_view op) {
-    static const std::unordered_map<std::string, OpType> operator_map = {
+    static const std::unordered_map<std::string, OpType> kOperatorMap = {
         {"+",  OpType::ADD },
         {"-",  OpType::SUB },
         {"*",  OpType::MUL },
@@ -23,8 +23,8 @@ OpType GetOperatorType(std::string_view op) {
         {"+",  OpType::PLUS},
         {"-",  OpType::MINU},
     };
-    auto it = operator_map.find(std::string(op));
-    if (it != operator_map.end()) {
+    auto it = kOperatorMap.find(std::string(op));
+    if (it != kOperatorMap.end()) {
         return it->second;
     }
     return OpType::NONE;

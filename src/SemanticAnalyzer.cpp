@@ -128,7 +128,7 @@ void SemanticAnalyzer::VisitBlock(Block& block) {
 // block contents.
 // -----------------------------------------------------------------------------
 void SemanticAnalyzer::VisitFuncDef(FuncDef& func_def) {
-    const int line = func_def.GetLine();
+    const int kLine = func_def.GetLine();
     Symbol sym;
     sym.type = BTypeToFunc(func_def.func_type);
     sym.name = func_def.ident;
@@ -136,7 +136,7 @@ void SemanticAnalyzer::VisitFuncDef(FuncDef& func_def) {
     for (const auto& p : func_def.func_f_params) {
         sym.param_types.push_back({p->btype, p->is_array});
     }
-    RegisterSymbol(func_def.ident, sym, line);
+    RegisterSymbol(func_def.ident, sym, kLine);
 
     // Requirement: redefined functions should also be fully analyzed to collect other errors,
     // so we don't return here
@@ -168,7 +168,7 @@ void SemanticAnalyzer::VisitMainFuncDef(MainFuncDef& main_func_def) {
 // ConstDef / VarDef: register symbol.
 // -----------------------------------------------------------------------------
 void SemanticAnalyzer::VisitConstDef(ConstDef& const_def) {
-    const int line = const_def.GetLine();
+    const int kLine = const_def.GetLine();
     Symbol sym;
     sym.name = const_def.ident;
     if (!const_def.array_size.has_value()) {
@@ -185,11 +185,11 @@ void SemanticAnalyzer::VisitConstDef(ConstDef& const_def) {
         sym.const_values = last_values_;
     }
 
-    RegisterSymbol(const_def.ident, sym, line);
+    RegisterSymbol(const_def.ident, sym, kLine);
 }
 
 void SemanticAnalyzer::VisitVarDef(VarDef& var_def) {
-    const int line = var_def.GetLine();
+    const int kLine = var_def.GetLine();
     Symbol sym;
     sym.name = var_def.ident;
     if (!var_def.array_size.has_value()) {
@@ -207,19 +207,19 @@ void SemanticAnalyzer::VisitVarDef(VarDef& var_def) {
         var_def.init_val->Accept(*this);
     }
 
-    RegisterSymbol(var_def.ident, sym, line);
+    RegisterSymbol(var_def.ident, sym, kLine);
 }
 
 // -----------------------------------------------------------------------------
 // FuncFParam: register in current scope (function scope).
 // -----------------------------------------------------------------------------
 void SemanticAnalyzer::VisitFuncFParam(FuncFParam& func_f_param) {
-    const int line = func_f_param.GetLine();
+    const int kLine = func_f_param.GetLine();
     Symbol sym;
     sym.name = func_f_param.ident;
     sym.type = func_f_param.is_array ? BTypeToVarArray(func_f_param.btype) :
                                        BTypeToVarScalar(func_f_param.btype);
-    RegisterSymbol(func_f_param.ident, sym, line);
+    RegisterSymbol(func_f_param.ident, sym, kLine);
 }
 
 // -----------------------------------------------------------------------------
@@ -357,8 +357,8 @@ void SemanticAnalyzer::VisitLVal(LVal& lval) {
     if (lval_is_left_of_assign_ && IsConst(sym->type)) {
         RecordError(lval.GetLine(), "h");
     }
-    if (lval.index) {
-        lval.index->Accept(*this);
+    if (lval.index.has_value() && *lval.index) {
+        (*lval.index)->Accept(*this);
     }
 
     // The type of the expression when used as an argument: no index and symbol is array type;
@@ -477,6 +477,7 @@ void SemanticAnalyzer::VisitFuncRParams(FuncRParams& func_r_params) {
 void SemanticAnalyzer::VisitConstExp(ConstExp& const_exp) {
     if (const_exp.inner) {
         const_exp.inner->Accept(*this);
+        const_exp.const_value = last_value_;
     }
 }
 

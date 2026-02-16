@@ -110,7 +110,7 @@ public:
 class LVal : public Exp {
 public:
     std::string ident;
-    std::unique_ptr<Exp> index;
+    std::optional<std::unique_ptr<Exp>> index;
 
     LVal(std::string ident, std::unique_ptr<Exp> index) :
     ident(std::move(ident)),
@@ -197,6 +197,7 @@ public:
 class ConstExp : public Exp {
 public:
     std::unique_ptr<Exp> inner;
+    std::optional<int> const_value;
 
     explicit ConstExp(std::unique_ptr<Exp> inner) : inner(std::move(inner)) {}
     void Accept(ASTVisitor& visitor) override;

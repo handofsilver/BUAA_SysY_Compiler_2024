@@ -177,13 +177,13 @@ void Lexer::GetDelimitor() {
     // Illegal symbol '&' or '|': report error 'a', but still produce token (as &&/||) so parsing
     // continues; value remains "&"/"|" per spec.
     if (NotEnd()) {
-        const int line = static_cast<int>(line_num_ + 1);
-        error_log_.push_back({line, "a"});
+        const int kLine = static_cast<int>(line_num_ + 1);
+        error_log_.push_back({kLine, "a"});
         char ch = source_[cur_pos_];
         if (ch == '&') {
-            cur_token_ = Token(TokenType::AND, line, "&");
+            cur_token_ = Token(TokenType::AND, kLine, "&");
         } else if (ch == '|') {
-            cur_token_ = Token(TokenType::OR, line, "|");
+            cur_token_ = Token(TokenType::OR, kLine, "|");
         }
         cur_pos_++;
     }
@@ -193,26 +193,26 @@ void Lexer::GetDelimitor() {
 // Lookahead (read-only peek without consuming)
 // -------------------------------------------------------------------------
 std::optional<Token> Lexer::PeekNext() {
-    const size_t save_pos = cur_pos_;
-    const size_t save_line = line_num_;
-    const std::optional<Token> save_token = cur_token_;
+    const size_t kSavePos = cur_pos_;
+    const size_t kSaveLine = line_num_;
+    const std::optional<Token> kSaveToken = cur_token_;
     Next();
     std::optional<Token> result = cur_token_;
-    cur_pos_ = save_pos;
-    line_num_ = save_line;
-    cur_token_ = save_token;
+    cur_pos_ = kSavePos;
+    line_num_ = kSaveLine;
+    cur_token_ = kSaveToken;
     return result;
 }
 
 std::optional<Token> Lexer::PeekNext2() {
-    const size_t save_pos = cur_pos_;
-    const size_t save_line = line_num_;
-    const std::optional<Token> save_token = cur_token_;
+    const size_t kSavePos = cur_pos_;
+    const size_t kSaveLine = line_num_;
+    const std::optional<Token> kSaveToken = cur_token_;
     Next();
     Next();
     std::optional<Token> result = cur_token_;
-    cur_pos_ = save_pos;
-    line_num_ = save_line;
-    cur_token_ = save_token;
+    cur_pos_ = kSavePos;
+    line_num_ = kSaveLine;
+    cur_token_ = kSaveToken;
     return result;
 }

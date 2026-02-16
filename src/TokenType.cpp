@@ -59,7 +59,7 @@ std::string ToString(TokenType type) {
 }
 
 std::optional<TokenType> GetDelimitorType(std::string_view delimitor) {
-    static const std::unordered_map<std::string, TokenType> delimitor_map = {
+    static const std::unordered_map<std::string, TokenType> kDelimitorMap = {
         {"!",  TokenType::NOT    },
         {"&&", TokenType::AND    },
         {"||", TokenType::OR     },
@@ -84,15 +84,15 @@ std::optional<TokenType> GetDelimitorType(std::string_view delimitor) {
         {"{",  TokenType::LBRACE },
         {"}",  TokenType::RBRACE },
     };
-    auto it = delimitor_map.find(std::string(delimitor));
-    if (it != delimitor_map.end()) {
+    auto it = kDelimitorMap.find(std::string(delimitor));
+    if (it != kDelimitorMap.end()) {
         return it->second;
     }
     return std::nullopt;
 }
 
 std::optional<TokenType> GetReservedWordType(std::string_view word) {
-    static const std::unordered_map<std::string, TokenType> reserved_word_map = {
+    static const std::unordered_map<std::string, TokenType> kReservedWordMap = {
         {"main",     TokenType::MAINTK    },
         {"const",    TokenType::CONSTTK   },
         {"int",      TokenType::INTTK     },
@@ -108,8 +108,8 @@ std::optional<TokenType> GetReservedWordType(std::string_view word) {
         {"printf",   TokenType::PRINTFTK  },
         {"return",   TokenType::RETURNTK  },
     };
-    auto it = reserved_word_map.find(std::string(word));
-    if (it != reserved_word_map.end()) {
+    auto it = kReservedWordMap.find(std::string(word));
+    if (it != kReservedWordMap.end()) {
         return it->second;
     }
     return std::nullopt;

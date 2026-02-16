@@ -87,7 +87,7 @@ namespace ir {
             if (!ptr_ty) {
                 return nullptr;
             }
-            Type* elem_ty = ptr_ty->GetPointerType();
+            Type* elem_ty = ptr_ty->GetPointeeType();
             return Create<LoadInst>("", elem_ty, bb, ptr);
         }
 

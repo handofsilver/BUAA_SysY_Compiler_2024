@@ -7,9 +7,10 @@
  */
 #include "IRGenVisitor.h"
 #include "AST.h"
+#include "IRScopeGuard.h"
+#include "ir/Constant.h"
 #include "ir/Instruction.h"
 #include <optional>
-
 namespace {
 
     /** Map comparison OpType to LLVM icmp predicate (for VisitBinaryExp). */
@@ -42,7 +43,9 @@ IRGenVisitor::IRGenVisitor() {
     builder_ = std::make_unique<ir::IRBuilder>();
 }
 
-std::unique_ptr<ir::Module> IRGenVisitor::GetModule() {
+std::unique_ptr<ir::Module> IRGenVisitor::Translate(CompUnit& comp_unit) {
+    IRScopeGuard guard(*this);
+    comp_unit.Accept(*this);
     return std::move(module_);
 }
 
@@ -50,7 +53,7 @@ std::unique_ptr<ir::Module> IRGenVisitor::GetModule() {
 // Scope helpers (symbol table)
 // -----------------------------------------------------------------------------
 
-ir::Value* IRGenVisitor::LookupVariable(const std::string& name) {
+ir::Value* IRGenVisitor::LookupVariable(const std::string& name) const {
     for (auto it = scopes_.rbegin(); it != scopes_.rend(); ++it) {
         auto i = it->map.find(name);
         if (i != it->map.end()) {
@@ -58,6 +61,10 @@ ir::Value* IRGenVisitor::LookupVariable(const std::string& name) {
         }
     }
     return nullptr;
+}
+
+void IRGenVisitor::RegisterVariable(const std::string& name, ir::Value* value) {
+    scopes_.back().map[name] = value;
 }
 
 void IRGenVisitor::PushScope() {
@@ -79,7 +86,6 @@ void IRGenVisitor::PopScope() {
 
 void IRGenVisitor::VisitCompUnit(CompUnit& comp_unit) {
     is_global_ = true;
-    PushScope();
     for (auto& d : comp_unit.decls) {
         d->Accept(*this);
     }
@@ -89,7 +95,6 @@ void IRGenVisitor::VisitCompUnit(CompUnit& comp_unit) {
     if (comp_unit.main_func_def) {
         comp_unit.main_func_def->Accept(*this);
     }
-    PopScope();
     is_global_ = false;
 }
 
@@ -111,6 +116,7 @@ void IRGenVisitor::VisitConstDef(ConstDef& const_def) {
 void IRGenVisitor::VisitVarDef(VarDef& var_def) {
     // Implement (exercise): Create global or alloca, optional init from InitVal, bind name in
     // scope.
+    is_lval_mode_ = true;
 }
 
 void IRGenVisitor::VisitConstInitVal(ConstInitVal& const_init_val) {
@@ -164,7 +170,9 @@ void IRGenVisitor::VisitAssignStmt(AssignStmt& assign_stmt) {
 }
 
 void IRGenVisitor::VisitExpStmt(ExpStmt& exp_stmt) {
-    // Implement (exercise): If expression present, visit it (result in temp_value_; may be unused).
+    if (exp_stmt.exp.has_value() && *exp_stmt.exp) {
+        (*exp_stmt.exp)->Accept(*this);
+    }
 }
 
 void IRGenVisitor::VisitIfStmt(IfStmt& if_stmt) {
@@ -179,7 +187,19 @@ void IRGenVisitor::VisitForStmt(ForStmt& for_stmt) {
 }
 
 void IRGenVisitor::VisitForInitOrStep(ForInitOrStep& for_init_or_step) {
-    // Implement (exercise): Treat as assignment: LVal = Exp; generate store in current block.
+    is_lval_mode_ = true;
+    if (for_init_or_step.lval) {
+        for_init_or_step.lval->Accept(*this);
+    }
+    is_lval_mode_ = false;
+    ir::Value* addr = temp_value_;
+    if (for_init_or_step.exp) {
+        for_init_or_step.exp->Accept(*this);
+    }
+    ir::Value* val = temp_value_;
+    if (addr && val && builder_->GetInsertBlock()) {
+        builder_->CreateStore(val, addr);
+    }
 }
 
 void IRGenVisitor::VisitBreakStmt(BreakStmt& break_stmt) {
@@ -198,10 +218,28 @@ void IRGenVisitor::VisitReturnStmt(ReturnStmt& return_stmt) {
 void IRGenVisitor::VisitGetintStmt(GetintStmt& getint_stmt) {
     // Implement (exercise): Create call @getint(), then store result to LVal (is_lval_mode_ = true,
     // visit LVal).
+    is_lval_mode_ = true;
+    getint_stmt.lval->Accept(*this);
+    is_lval_mode_ = false;
+    ir::Value* addr = temp_value_;
+    ir::Instruction* call =
+        builder_->CreateCall(module_->GetI32Type(), module_->GetFunction("getint"), {});
+    if (addr && call && builder_->GetInsertBlock()) {
+        builder_->CreateStore(call, addr);
+    }
 }
 
 void IRGenVisitor::VisitGetcharStmt(GetcharStmt& getchar_stmt) {
     // Implement (exercise): Create call @getchar(), then store result to LVal.
+    is_lval_mode_ = true;
+    getchar_stmt.lval->Accept(*this);
+    is_lval_mode_ = false;
+    ir::Value* addr = temp_value_;
+    ir::Instruction* call =
+        builder_->CreateCall(module_->GetI32Type(), module_->GetFunction("getchar"), {});
+    if (addr && call && builder_->GetInsertBlock()) {
+        builder_->CreateStore(call, addr);
+    }
 }
 
 void IRGenVisitor::VisitPrintfStmt(PrintfStmt& printf_stmt) {
@@ -214,8 +252,48 @@ void IRGenVisitor::VisitPrintfStmt(PrintfStmt& printf_stmt) {
 // -----------------------------------------------------------------------------
 
 void IRGenVisitor::VisitLVal(LVal& lval) {
-    // Implement (exercise): LookupVariable(ident). If array element, evaluate index, CreateGEP,
-    // then if is_lval_mode_ leave address in temp_value_, else CreateLoad and set temp_value_.
+    // LVal is either:  ident   or   ident [ Exp ]
+    // We need: (1) base address from symbol table; (2) if index present, GEP to element;
+    //          (3) if is_lval_mode_ → leave address in temp_value_; else → load and put value.
+    ir::Value* value = LookupVariable(lval.ident);
+    if (!value) {
+        return;
+    }
+
+    // --- No index: scalar (or whole array when used as pointer) ---
+    if (!lval.index.has_value() || !*lval.index) {
+        if (is_lval_mode_) {
+            temp_value_ = value; // caller will store to this address
+        } else {
+            ir::Instruction* load = builder_->CreateLoad(value);
+            temp_value_ = load ? load : value;
+        }
+        return;
+    }
+
+    // --- Has index: array element ---
+    (*lval.index)->Accept(*this);
+    ir::Value* index = temp_value_;
+    if (!index || !builder_->GetInsertBlock()) {
+        return;
+    }
+    auto* ptr_ty = dynamic_cast<ir::PointerType*>(value->GetType());
+    if (!ptr_ty) {
+        temp_value_ = value;
+        return;
+    }
+    ir::Type* elem_ty = ptr_ty->GetPointeeType();
+    ir::Instruction* gep = builder_->CreateGEP(module_->GetPointerType(elem_ty), value, index);
+    if (!gep) {
+        temp_value_ = value;
+        return;
+    }
+    if (is_lval_mode_) {
+        temp_value_ = gep; // caller will store to this element address
+    } else {
+        ir::Instruction* load = builder_->CreateLoad(gep);
+        temp_value_ = load ? load : gep;
+    }
 }
 
 void IRGenVisitor::VisitNumber(Number& number) {
@@ -223,7 +301,7 @@ void IRGenVisitor::VisitNumber(Number& number) {
 }
 
 void IRGenVisitor::VisitCharacter(Character& character) {
-    // Implement (exercise): Create constant (i8 or i32 as required), set temp_value_.
+    temp_value_ = module_->GetInt8Constant(character.char_const);
 }
 
 void IRGenVisitor::VisitBinaryExp(BinaryExp& binary_exp) {
@@ -255,6 +333,29 @@ void IRGenVisitor::VisitBinaryExp(BinaryExp& binary_exp) {
 void IRGenVisitor::VisitUnaryExp(UnaryExp& unary_exp) {
     // Implement (exercise): Handle PrimaryExp (delegate to child), UnaryOp '-' (sub 0, x), '!'
     // (icmp eq x, 0).
+    unary_exp.operand->Accept(*this);
+    ir::Value* operand = temp_value_;
+    if (!operand || !builder_->GetInsertBlock()) {
+        return;
+    }
+
+    OpType op = unary_exp.op;
+    ir::ConstantInt* zero = module_->GetInt32Constant(0);
+
+    if (op == OpType::MINU) {
+        ir::Instruction* inst = builder_->CreateBinary(OpType::SUB, zero, temp_value_);
+        temp_value_ = inst ? inst : temp_value_;
+        return;
+    }
+    if (op == OpType::NOT) {
+        ir::Instruction* cmp =
+            builder_->CreateIcmp(module_->GetI1Type(), ir::IcmpPred::EQ, operand, zero);
+        if (cmp) {
+            ir::Instruction* zext = builder_->CreateZext(cmp, module_->GetI32Type());
+            temp_value_ = zext ? zext : cmp;
+        }
+        return;
+    }
 }
 
 void IRGenVisitor::VisitFuncCall(FuncCall& func_call) {
@@ -268,4 +369,7 @@ void IRGenVisitor::VisitFuncRParams(FuncRParams& func_r_params) {
 
 void IRGenVisitor::VisitConstExp(ConstExp& const_exp) {
     // Implement (exercise): Evaluate as constant expression (e.g. for array size or constant init).
+    if (const_exp.const_value.has_value()) {
+        temp_value_ = module_->GetInt32Constant(const_exp.const_value.value());
+    }
 }

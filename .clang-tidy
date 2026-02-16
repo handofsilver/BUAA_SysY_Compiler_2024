@@ -21,30 +21,49 @@ Checks: >
   -bugprone-narrowing-conversions
 
 CheckOptions:
-  # --- 命名规范 (Google Style) ---
-  
-  # 1. 类名/结构体：大驼峰 (MyClass)
-  - { key: readability-identifier-naming.ClassCase,           value: CamelCase }
-  - { key: readability-identifier-naming.StructCase,          value: CamelCase }
+  # --- 类与结构体 ---
+  - { key: readability-identifier-naming.ClassCase,            value: CamelCase  }
+  - { key: readability-identifier-naming.StructCase,           value: CamelCase  }
 
-  # 2. 函数名：大驼峰 (DoSomething)
-  - { key: readability-identifier-naming.FunctionCase,        value: CamelCase }
+  # --- 函数 ---
+  - { key: readability-identifier-naming.FunctionCase,         value: CamelCase  }
 
-  # 3. 变量名：小写下划线 (my_local_variable)
-  - { key: readability-identifier-naming.VariableCase,        value: lower_case }
+  # --- 变量与成员 ---
+  - { key: readability-identifier-naming.VariableCase,         value: lower_case }
+  - { key: readability-identifier-naming.ParameterCase,        value: lower_case }
+  - { key: readability-identifier-naming.MemberCase,           value: lower_case }
+  - { key: readability-identifier-naming.MemberSuffix,         value: '_'        }
+  # 结构体公有成员通常不加下划线
+  - { key: readability-identifier-naming.PublicMemberSuffix,   value: ''         }
 
-  # 4. 【关键】类成员变量：小写下划线 + 下划线后缀 (my_member_)
-  - { key: readability-identifier-naming.MemberCase,          value: lower_case }
-  - { key: readability-identifier-naming.MemberSuffix,        value: '_'        }
-  # 忽略 public 成员 (struct 里的字段通常不需要下划线后缀)
-  - { key: readability-identifier-naming.PublicMemberSuffix,  value: ''         }
+  # --- 常量 (k + CamelCase) ---
+  - { key: readability-identifier-naming.ConstantCase,         value: CamelCase  }
+  - { key: readability-identifier-naming.ConstantPrefix,       value: k          }
+  - { key: readability-identifier-naming.GlobalConstantCase,   value: CamelCase  }
+  - { key: readability-identifier-naming.GlobalConstantPrefix, value: k          }
+  - { key: readability-identifier-naming.StaticConstantCase,   value: CamelCase  }
+  - { key: readability-identifier-naming.StaticConstantPrefix, value: k          }
 
-  # 5. 常量/全局常量：k + 大驼峰 (kMaxBuffer)
-  - { key: readability-identifier-naming.GlobalConstantCase,  value: CamelCase }
-  - { key: readability-identifier-naming.GlobalConstantPrefix, value: k         }
+  # --- 枚举 ---
+  - { key: readability-identifier-naming.EnumCase,             value: CamelCase  }
+  - { key: readability-identifier-naming.EnumConstantCase,     value: CamelCase  }
+  - { key: readability-identifier-naming.EnumConstantPrefix,   value: k          }
 
-  # 6. 宏定义：全大写下划线 (MY_MACRO)
-  - { key: readability-identifier-naming.MacroDefinitionCase, value: UPPER_CASE }
-  
-  # 7. 忽略某些特殊场景
-  - { key: readability-identifier-naming.ParameterCase,       value: lower_case }
+  # --- 宏与命名空间 ---
+  - { key: readability-identifier-naming.MacroDefinitionCase,  value: UPPER_CASE }
+  - { key: readability-identifier-naming.NamespaceCase,        value: lower_case }
+
+  # --- 模板 ---
+  - { key: readability-identifier-naming.TypeTemplateParameterCase, value: CamelCase }
+
+  # 静态常量
+  - { key: readability-identifier-naming.StaticConstantCase,   value: CamelCase }
+  - { key: readability-identifier-naming.StaticConstantPrefix, value: k         }
+
+  # 类内静态常量
+  - { key: readability-identifier-naming.ClassConstantCase,    value: CamelCase }
+  - { key: readability-identifier-naming.ClassConstantPrefix,  value: k         }
+
+  #  constexpr 通常也按常量处理
+  - { key: readability-identifier-naming.ConstexprVariableCase,   value: CamelCase }
+  - { key: readability-identifier-naming.ConstexprVariablePrefix, value: k         }

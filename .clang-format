@@ -15,7 +15,7 @@ AccessModifierOffset:	-4
 # 对齐宏定义
 AlignConsecutiveMacros: AcrossEmptyLinesAndComments
 # 宏定义缩进`#`的位置 None、AfterHash、BeforeHash
-IndentPPDirectives: BeforeHash 
+IndentPPDirectives: BeforeHash
 # 多行宏定义`\`符号的位置
 AlignEscapedNewlines: Left
 # 分割较长的字符串字面量
@@ -47,10 +47,10 @@ AllowShortFunctionsOnASingleLine:	Empty
 AllowShortIfStatementsOnASingleLine:	false
 # 允许短的循环保持在同一行
 AllowShortLoopsOnASingleLine:	false
- 
+
 # 总是在定义返回类型后换行(deprecated)
 AlwaysBreakAfterDefinitionReturnType:	None
-# 总是在返回类型后换行: None, All, TopLevel(顶级函数，不包括在类中的函数), 
+# 总是在返回类型后换行: None, All, TopLevel(顶级函数，不包括在类中的函数),
 #   AllDefinitions(所有的定义，不包括声明), TopLevelDefinitions(所有的顶级函数的定义)
 AlwaysBreakAfterReturnType:	None
 # 总是在多行string字面量前换行
@@ -62,7 +62,7 @@ BinPackArguments:	true
 # false表示所有形参要么都在同一行，要么都各自一行
 BinPackParameters:	true
 # 大括号换行，只有当BreakBeforeBraces设置为Custom时才有效
-BraceWrapping:   
+BraceWrapping:
   # class定义后面
   AfterClass:	false
   # 控制语句后面
@@ -79,7 +79,7 @@ BraceWrapping:
   AfterStruct:	false
   # union定义后面
   AfterUnion:	false
- 
+
   AfterExternBlock: false
   # catch之前
   BeforeCatch:	false
@@ -90,17 +90,17 @@ BraceWrapping:
   SplitEmptyFunction: true
   SplitEmptyRecord: true
   SplitEmptyNamespace: true
- 
+
 # 在二元运算符前换行: None(在操作符后换行), NonAssignment(在非赋值的操作符前换行), All(在操作符前换行)
 BreakBeforeBinaryOperators:	None
-# 在大括号前换行: Attach(始终将大括号附加到周围的上下文), Linux(除函数、命名空间和类定义，与Attach类似), 
-#   Mozilla(除枚举、函数、记录定义，与Attach类似), Stroustrup(除函数定义、catch、else，与Attach类似), 
+# 在大括号前换行: Attach(始终将大括号附加到周围的上下文), Linux(除函数、命名空间和类定义，与Attach类似),
+#   Mozilla(除枚举、函数、记录定义，与Attach类似), Stroustrup(除函数定义、catch、else，与Attach类似),
 #   Allman(总是在大括号前换行), GNU(总是在大括号前换行，并对于控制语句的大括号增加额外的缩进), WebKit(在函数前换行), Custom
 #   注：这里认为语句块也属于函数
 BreakBeforeBraces:	Custom
 # 在三元运算符前换行
 BreakBeforeTernaryOperators:	false
- 
+
 # 在构造函数的初始化列表的逗号前换行
 BreakConstructorInitializersBeforeComma:	false
 BreakConstructorInitializers: AfterColon
@@ -128,7 +128,7 @@ ExperimentalAutoDetectBinPacking:	false
 ForEachMacros:	[ foreach, Q_FOREACH, BOOST_FOREACH ]
 # 对#include进行排序，匹配了某正则表达式的#include拥有对应的优先级，匹配不到的则默认优先级为INT_MAX(优先级越小排序越靠前)，
 #   可以定义负数优先级从而保证某些#include永远在最前面
-IncludeCategories: 
+IncludeCategories:
   - Regex:	'^"(llvm|llvm-c|clang|clang-c)/'
     Priority:	2
   - Regex:	'^(<|"(gtest|isl|json)/)'
@@ -140,7 +140,7 @@ IncludeCategories:
 
 # 缩进case标签
 IndentCaseLabels:	true
- 
+
 # 缩进宽度
 IndentWidth:	4
 # 函数返回类型换行时，缩进函数声明或函数定义的函数名
@@ -205,4 +205,4 @@ TabWidth:	4
 # 使用tab字符: Never, ForIndentation, ForContinuationAndIndentation, Always
 UseTab:	Never
 # 属性后的换行符
-BreakAfterAttributes: Leave 
+BreakAfterAttributes: Leave

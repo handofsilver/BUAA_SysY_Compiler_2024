@@ -76,7 +76,7 @@ int main() {
                       return a.first < b.first;
                   });
 
-        const bool emit_symbol_output =
+        const bool kEmitSymbolOutput =
             true; // set false to disable symbol.txt (e.g. for full compiler)
 
         if (!all_errors.empty()) {
@@ -84,7 +84,7 @@ int main() {
             for (const auto& p : all_errors) {
                 err << p.first << " " << p.second << "\n";
             }
-        } else if (analyzer && emit_symbol_output) {
+        } else if (analyzer && kEmitSymbolOutput) {
             std::ofstream out("symbol.txt");
 
             std::vector<std::pair<int, Symbol>> ordered_symbols = analyzer->GetOrderedSymbols();
