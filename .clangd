@@ -1,11 +1,11 @@
 CompileFlags:
   # 显式告诉 clangd 编译数据库在 build 目录
   CompilationDatabase: "build"
-  
+
   # 强制添加编译参数：
   # 1. -std=c++17: 明确告诉 clangd 我们用的是现代 C++，别用 C++98 标准来烦我
   # 2. -Wno-...: 显式关闭某些特定的编译器警告
-  Add: 
+  Add:
     - "-std=c++17"
     - "-Wall"
     - "-Wno-unknown-pragmas"
@@ -15,7 +15,7 @@ CompileFlags:
 
 Diagnostics:
   # 屏蔽那些即便加了 flag 还有可能漏网的顽固警告 (对应你截图中的报错代码)
-  Suppress: 
+  Suppress:
     - "c++98-compat"
     - "c++98-compat-pedantic"
     - "shadow-field-in-constructor"  # 允许构造函数参数和成员同名 (Token(value) : value(value))

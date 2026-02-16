@@ -16,7 +16,14 @@ namespace ir {
     /**
      * @brief Enumeration of all type kinds in the IR.
      */
-    enum class TypeID { VoidTyID, LabelTyID, IntegerTyID, FunctionTyID, PointerTyID };
+    enum class TypeID {
+        VOID_TY_ID,
+        LABEL_TY_ID,
+        INTEGER_TY_ID,
+        FUNCTION_TY_ID,
+        POINTER_TY_ID,
+        ARRAY_TY_ID
+    };
 
     /**
      * @brief Base class for all IR types.
@@ -44,7 +51,7 @@ namespace ir {
      */
     class IntegerType : public Type {
     public:
-        explicit IntegerType(unsigned bits = 32) : Type(TypeID::IntegerTyID), bits_(bits) {}
+        explicit IntegerType(unsigned bits = 32) : Type(TypeID::INTEGER_TY_ID), bits_(bits) {}
 
         unsigned GetBits() const {
             return bits_;
@@ -64,7 +71,7 @@ namespace ir {
     class PointerType : public Type {
     public:
         explicit PointerType(Type* pointee_type) :
-        Type(TypeID::PointerTyID),
+        Type(TypeID::POINTER_TY_ID),
         pointee_type_(pointee_type) {}
 
         Type* GetPointeeType() const {
@@ -79,12 +86,35 @@ namespace ir {
     };
 
     /**
+     * @brief Array type: [N x element_type] (e.g. [10 x i32]).
+     * Used as pointee of pointer for local/global arrays; distinguishes from i32* (param).
+     */
+    class ArrayType : public Type {
+    public:
+        ArrayType(Type* element_type, unsigned num_elements) :
+        Type(TypeID::ARRAY_TY_ID),
+        element_type_(element_type),
+        num_elements_(num_elements) {}
+
+        Type* GetElementType() const {
+            return element_type_;
+        }
+        unsigned GetNumElements() const {
+            return num_elements_;
+        }
+
+    private:
+        Type* element_type_;
+        unsigned num_elements_;
+    };
+
+    /**
      * @brief Function type: return type + parameter types.
      */
     class FunctionType : public Type {
     public:
         FunctionType(Type* return_type, const std::vector<Type*>& param_types) :
-        Type(TypeID::FunctionTyID),
+        Type(TypeID::FUNCTION_TY_ID),
         return_type_(return_type),
         param_types_(param_types) {}
 
@@ -111,7 +141,7 @@ namespace ir {
      */
     class VoidType : public Type {
     public:
-        VoidType() : Type(TypeID::VoidTyID) {}
+        VoidType() : Type(TypeID::VOID_TY_ID) {}
     };
 
     /**
@@ -119,7 +149,7 @@ namespace ir {
      */
     class LabelType : public Type {
     public:
-        LabelType() : Type(TypeID::LabelTyID) {}
+        LabelType() : Type(TypeID::LABEL_TY_ID) {}
     };
 
     /**

@@ -127,4 +127,23 @@ private:
 
     /** @brief Register a variable in the current scope. */
     void RegisterVariable(const std::string& name, ir::Value* value);
+
+    /**
+     * @brief Create a new BasicBlock, add it to current_function_, return raw pointer.
+     */
+    ir::BasicBlock* CreateBasicBlock(const std::string& name);
+
+    /**
+     * @brief True if current insert block is null, empty, or last instruction is Br/Ret.
+     */
+    bool IsBlockTerminated() const;
+
+    /**
+     * @brief Create an alloca in the current function's entry block (at the front), then restore
+     * the previous insert point. Used for local variables and parameter copies.
+     * @param type Allocated type (e.g. i32); the instruction's result type will be pointer to it.
+     * @param name Optional name for the alloca result.
+     * @return The AllocaInst*, or nullptr if no current function or entry block.
+     */
+    ir::Instruction* CreateEntryBlockAlloca(ir::Type* type, const std::string& name = "");
 };

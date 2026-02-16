@@ -119,4 +119,16 @@ namespace ir {
         EnsureDeclaredLibFunction(name);
         return FindFunctionByName(name);
     }
+
+    Function* Module::CreateFunction(const std::string& name, Type* return_type,
+                                     const std::vector<Type*>& param_types) {
+        function_types_.push_back(std::make_unique<FunctionType>(return_type, param_types));
+        auto func = std::make_unique<Function>(name, function_types_.back().get());
+        for (size_t i = 0; i < param_types.size(); ++i) {
+            func->AddArgument(std::make_unique<Argument>("", param_types[i]));
+        }
+        Function* ptr = func.get();
+        functions_.push_back(std::move(func));
+        return ptr;
+    }
 } // namespace ir

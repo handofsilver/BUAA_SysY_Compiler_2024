@@ -8,6 +8,7 @@
 #ifndef IR_FUNCTION_H
 #define IR_FUNCTION_H
 
+#include "ir/Argument.h"
 #include "ir/BasicBlock.h"
 #include "ir/Constant.h"
 
@@ -19,7 +20,7 @@ namespace ir {
     /**
      * @brief Represents a function in the module.
      *
-     * Ownership: Function owns its BasicBlocks (vector of unique_ptr).
+     * Ownership: Function owns its BasicBlocks and Arguments (vectors of unique_ptr).
      * Module owns Functions. Function is a Constant because the function
      * address is a compile-time constant.
      */
@@ -36,8 +37,35 @@ namespace ir {
             return blocks_;
         }
 
+        /** @brief Append basic block to this function. */
+        void AddBlock(std::unique_ptr<BasicBlock> block) {
+            blocks_.push_back(std::move(block));
+        }
+
+        /** @brief Get the list of arguments (ownership held here). */
+        std::vector<std::unique_ptr<Argument>>& GetArguments() {
+            return args_;
+        }
+        const std::vector<std::unique_ptr<Argument>>& GetArguments() const {
+            return args_;
+        }
+
+        /** @brief Get the i-th argument value, or nullptr if out of range. */
+        Argument* GetArgument(size_t i) const {
+            if (i >= args_.size()) {
+                return nullptr;
+            }
+            return args_[i].get();
+        }
+
+        /** @brief Add an argument to this function. */
+        void AddArgument(std::unique_ptr<Argument> arg) {
+            args_.push_back(std::move(arg));
+        }
+
     private:
         std::vector<std::unique_ptr<BasicBlock>> blocks_;
+        std::vector<std::unique_ptr<Argument>> args_;
     };
 
 } // namespace ir

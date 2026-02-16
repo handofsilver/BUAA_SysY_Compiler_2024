@@ -76,6 +76,14 @@ namespace ir {
          */
         Function* GetFunction(const std::string& name);
 
+        /**
+         * @brief Create a user-defined function and add it to the module.
+         * Allocates FunctionType and Argument values; ownership held by Module/Function.
+         * @return The new Function* (never nullptr).
+         */
+        Function* CreateFunction(const std::string& name, Type* return_type,
+                                const std::vector<Type*>& param_types);
+
         /** Out-of-line destructor so TUs that only see Module do not need to destroy Instruction.
          */
         ~Module();
