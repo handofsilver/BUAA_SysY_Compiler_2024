@@ -157,6 +157,263 @@ ir::Instruction* IRGenVisitor::CreateEntryBlockAlloca(ir::Type* type, const std:
 }
 
 // -----------------------------------------------------------------------------
+// Constant expression evaluation (compile-time, for global initializers)
+// -----------------------------------------------------------------------------
+
+int IRGenVisitor::GetConstIntVal(Exp* exp) {
+    if (!exp) {
+        return 0;
+    }
+    if (auto* num = dynamic_cast<Number*>(exp)) {
+        return num->int_const;
+    }
+    if (auto* cexp = dynamic_cast<ConstExp*>(exp)) {
+        return GetConstIntVal(cexp->inner.get());
+    }
+    if (auto* uexp = dynamic_cast<UnaryExp*>(exp)) {
+        int v = GetConstIntVal(uexp->operand.get());
+        if (uexp->op == OpType::PLUS) {
+            return v;
+        }
+        if (uexp->op == OpType::MINU) {
+            return -v;
+        }
+        return 0;
+    }
+    if (auto* bexp = dynamic_cast<BinaryExp*>(exp)) {
+        int l = GetConstIntVal(bexp->lhs.get());
+        int r = GetConstIntVal(bexp->rhs.get());
+        switch (bexp->op) {
+            case OpType::ADD: return l + r;
+            case OpType::SUB: return l - r;
+            case OpType::MUL: return l * r;
+            case OpType::DIV: return (r == 0) ? 0 : (l / r);
+            case OpType::MOD: return (r == 0) ? 0 : (l % r);
+            default: return 0;
+        }
+    }
+    return 0;
+}
+
+// -----------------------------------------------------------------------------
+// Helpers for variable/constant definition
+// -----------------------------------------------------------------------------
+
+ir::Type* IRGenVisitor::GetCurDeclType() const {
+    return (current_decl_btype_ == BType::CHAR) ? static_cast<ir::Type*>(module_->GetI8Type()) :
+                                                  static_cast<ir::Type*>(module_->GetI32Type());
+}
+
+int IRGenVisitor::EvalArraySizeFromConstExp(ConstExp* cexp) {
+    if (!cexp || !cexp->inner) {
+        return 1;
+    }
+    int n = GetConstIntVal(cexp->inner.get());
+    return (n <= 0) ? 1 : n;
+}
+
+ir::Constant* IRGenVisitor::BuildConstScalarInit(int val) const {
+    return (current_decl_btype_ == BType::CHAR) ?
+               static_cast<ir::Constant*>(module_->GetInt8Constant(val)) :
+               static_cast<ir::Constant*>(module_->GetInt32Constant(val));
+}
+
+ir::Constant* IRGenVisitor::BuildConstArrayInit(ir::ArrayType* arr_ty,
+                                                const std::vector<int>& values) const {
+    std::vector<ir::Constant*> inits;
+    for (int v : values) {
+        inits.push_back(BuildConstScalarInit(v));
+    }
+    return module_->CreateConstantArray(arr_ty, inits);
+}
+
+void IRGenVisitor::EmitGlobalConstDef(ConstDef& const_def, ir::Type* elem_type) {
+    const bool kIsArray = const_def.array_size.has_value() && const_def.array_size->get();
+    ir::Type* var_type = nullptr;
+    ir::Constant* init = nullptr;
+
+    if (kIsArray) {
+        // --- Global const array: type [N x T], init = ConstantArray (no Store allowed) ---
+        int n = EvalArraySizeFromConstExp(const_def.array_size->get());
+        ir::ArrayType* arr_ty = module_->GetArrayType(elem_type, static_cast<unsigned>(n));
+        var_type = arr_ty;
+
+        // Parse init: ConstInitVal is variant<SingleExp, ExpList, StringVal>; we need ExpList.
+        std::vector<int> values;
+        auto* list = std::get_if<ConstInitVal::ExpList>(&const_def.const_init_val->value);
+        if (list) {
+            for (auto& cexp : *list) {
+                values.push_back(GetConstIntVal(cexp->inner.get()));
+            }
+        }
+        // Pad with zeros if init list is shorter than n (e.g. int a[5] = {1,2}; -> 1,2,0,0,0).
+        while (static_cast<int>(values.size()) < n) {
+            values.push_back(0);
+        }
+        init = BuildConstArrayInit(arr_ty, values);
+    } else {
+        // --- Global const scalar: type T, init = ConstantInt ---
+        var_type = elem_type;
+        int val = 0;
+        auto* single = std::get_if<ConstInitVal::SingleExp>(&const_def.const_init_val->value);
+        if (single && single->get()) {
+            val = GetConstIntVal((*single)->inner.get());
+        }
+        init = BuildConstScalarInit(val);
+    }
+
+    // Globals: scalar has type T, array has type T* (pointer to [N x T]). Then create and bind.
+    ir::Type* global_type = kIsArray ? module_->GetPointerType(var_type) : var_type;
+    ir::GlobalVar* gv = module_->CreateGlobalVar(const_def.ident, global_type, init, true);
+    RegisterVariable(const_def.ident, gv);
+}
+
+void IRGenVisitor::EmitLocalConstDef(ConstDef& const_def, ir::Type* elem_type) {
+    const bool kIsArray = const_def.array_size.has_value() && const_def.array_size->get();
+
+    if (kIsArray) {
+        // Local const array: alloca [N x T], then GEP+Store for each element
+        int n = EvalArraySizeFromConstExp(const_def.array_size->get());
+        ir::ArrayType* arr_ty = module_->GetArrayType(elem_type, static_cast<unsigned>(n));
+        ir::Instruction* alloca = CreateEntryBlockAlloca(arr_ty, const_def.ident);
+        RegisterVariable(const_def.ident, alloca);
+
+        auto* list = std::get_if<ConstInitVal::ExpList>(&const_def.const_init_val->value);
+        if (list && builder_->GetInsertBlock()) {
+            for (size_t i = 0; i < list->size() && i < static_cast<size_t>(n); ++i) {
+                int val = GetConstIntVal((*list)[i]->inner.get());
+                ir::Value* to_store = BuildConstScalarInit(val);
+                ir::Value* idx = module_->GetInt32Constant(static_cast<int64_t>(i));
+                ir::Instruction* gep = builder_->CreateGEP(
+                    module_->GetPointerType(elem_type), alloca, module_->GetInt32Constant(0), idx);
+                if (gep && to_store) {
+                    builder_->CreateStore(to_store, gep);
+                }
+            }
+        }
+    } else {
+        // Local const scalar: alloca T, Store constant
+        ir::Instruction* alloca = CreateEntryBlockAlloca(elem_type, const_def.ident);
+        RegisterVariable(const_def.ident, alloca);
+
+        int val = 0;
+        auto* single = std::get_if<ConstInitVal::SingleExp>(&const_def.const_init_val->value);
+        if (single && single->get() && builder_->GetInsertBlock()) {
+            val = GetConstIntVal((*single)->inner.get());
+            builder_->CreateStore(BuildConstScalarInit(val), alloca);
+        }
+    }
+}
+
+void IRGenVisitor::EmitGlobalVarDef(VarDef& var_def, ir::Type* elem_type) {
+    const bool kIsArray = var_def.array_size.has_value() && var_def.array_size->get();
+    ir::Type* var_type = nullptr;
+    ir::Constant* init = nullptr;
+
+    if (kIsArray) {
+        // --- Global var array: [N x T], init = ConstantArray (or zero-padded) ---
+        int n = EvalArraySizeFromConstExp(var_def.array_size->get());
+        ir::ArrayType* arr_ty = module_->GetArrayType(elem_type, static_cast<unsigned>(n));
+        var_type = arr_ty;
+
+        // VarDef may have no init_val (e.g. int a[3];); if present, parse ExpList and eval each.
+        std::vector<int> values;
+        if (var_def.init_val) {
+            auto* list = std::get_if<InitVal::ExpList>(&var_def.init_val->value);
+            if (list) {
+                for (auto& e : *list) {
+                    values.push_back(GetConstIntVal(e.get()));
+                }
+            }
+        }
+        while (static_cast<int>(values.size()) < n) {
+            values.push_back(0);
+        }
+        init = BuildConstArrayInit(arr_ty, values);
+    } else {
+        // --- Global var scalar: T, optional ConstantInt init ---
+        var_type = elem_type;
+        if (var_def.init_val) {
+            auto* single = std::get_if<InitVal::SingleExp>(&var_def.init_val->value);
+            int val = 0;
+            if (single && single->get()) {
+                val = GetConstIntVal(single->get());
+            }
+            init = BuildConstScalarInit(val);
+        }
+    }
+
+    ir::Type* global_type = kIsArray ? module_->GetPointerType(var_type) : var_type;
+    ir::GlobalVar* gv = module_->CreateGlobalVar(var_def.ident, global_type, init, false);
+    RegisterVariable(var_def.ident, gv);
+}
+
+void IRGenVisitor::EmitLocalVarDef(VarDef& var_def, ir::Type* elem_type) {
+    const bool kIsArray = var_def.array_size.has_value() && var_def.array_size->get();
+
+    if (kIsArray) {
+        // --- Local var array: alloca [N x T], then optional GEP+Store per element ---
+        int n = 1;
+        if (var_def.array_size && var_def.array_size->get()) {
+            n = EvalArraySizeFromConstExp(var_def.array_size->get());
+        }
+        ir::ArrayType* arr_ty = module_->GetArrayType(elem_type, static_cast<unsigned>(n));
+        ir::Instruction* alloca = CreateEntryBlockAlloca(arr_ty, var_def.ident);
+        RegisterVariable(var_def.ident, alloca);
+
+        // If init present: visit each Exp in the list (runtime eval), then GEP + Store.
+        if (var_def.init_val && builder_->GetInsertBlock()) {
+            auto* list = std::get_if<InitVal::ExpList>(&var_def.init_val->value);
+            if (list) {
+                for (size_t i = 0; i < list->size() && i < static_cast<size_t>(n); ++i) {
+                    (*list)[i]->Accept(*this);
+                    ir::Value* val = temp_value_;
+                    if (val) {
+                        ir::Value* idx = module_->GetInt32Constant(static_cast<int64_t>(i));
+                        ir::Instruction* gep =
+                            builder_->CreateGEP(module_->GetPointerType(elem_type), alloca,
+                                                module_->GetInt32Constant(0), idx);
+                        if (gep) {
+                            builder_->CreateStore(val, gep);
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        // --- Local var scalar: alloca T, optional Store(exp result) ---
+        ir::Instruction* alloca = CreateEntryBlockAlloca(elem_type, var_def.ident);
+        RegisterVariable(var_def.ident, alloca);
+
+        // If init present: visit the single Exp, then Store(temp_value_, alloca).
+        if (var_def.init_val && builder_->GetInsertBlock()) {
+            auto* single = std::get_if<InitVal::SingleExp>(&var_def.init_val->value);
+            if (single && single->get()) {
+                (*single)->Accept(*this);
+                if (temp_value_) {
+                    builder_->CreateStore(temp_value_, alloca);
+                }
+            }
+        }
+    }
+}
+
+ir::Value* IRGenVisitor::EmitGlobalStringLiteral(const std::string& str) {
+    // Null-terminated i8 array; empty string -> [1 x i8] with 0.
+    std::vector<ir::Constant*> inits;
+    for (unsigned char c : str) {
+        inits.push_back(module_->GetInt8Constant(static_cast<int64_t>(c)));
+    }
+    inits.push_back(module_->GetInt8Constant(0));
+    ir::Type* i8 = module_->GetI8Type();
+    ir::ArrayType* arr_ty = module_->GetArrayType(i8, static_cast<unsigned>(inits.size()));
+    ir::Constant* init = module_->CreateConstantArray(arr_ty, inits);
+    std::string name = ".str." + std::to_string(printf_str_counter_++);
+    ir::GlobalVar* g = module_->CreateGlobalVar(name, module_->GetPointerType(arr_ty), init, true);
+    return g;
+}
+
+// -----------------------------------------------------------------------------
 // CompUnit and declarations (global vs local)
 // -----------------------------------------------------------------------------
 
@@ -175,32 +432,45 @@ void IRGenVisitor::VisitCompUnit(CompUnit& comp_unit) {
 }
 
 void IRGenVisitor::VisitConstDecl(ConstDecl& const_decl) {
-    // Implement (exercise): For each ConstDef, create global constant or local alloca + store
-    // depending on is_global_. Use ConstInitVal for initializer.
+    current_decl_btype_ = const_decl.btype;
+    for (auto& def : const_decl.const_defs) {
+        def->Accept(*this);
+    }
 }
 
 void IRGenVisitor::VisitVarDecl(VarDecl& var_decl) {
-    // Implement (exercise): For each VarDef, create global variable or local alloca (and store if
-    // InitVal present). Respect is_global_.
+    current_decl_btype_ = var_decl.btype;
+    for (auto& def : var_decl.var_defs) {
+        def->Accept(*this);
+    }
 }
 
 void IRGenVisitor::VisitConstDef(ConstDef& const_def) {
-    // Implement (exercise): Create constant/alloc, bind name in current scope. Evaluate
-    // ConstInitVal.
+    ir::Type* elem_type = GetCurDeclType();
+    if (is_global_) {
+        EmitGlobalConstDef(const_def, elem_type);
+    } else {
+        EmitLocalConstDef(const_def, elem_type);
+    }
 }
 
 void IRGenVisitor::VisitVarDef(VarDef& var_def) {
-    // VarDef: global -> get/create global and bind; local -> entry alloca and bind (init handled by
-    // InitVal visit)
+    ir::Type* elem_type = GetCurDeclType();
+    if (is_global_) {
+        EmitGlobalVarDef(var_def, elem_type);
+    } else {
+        EmitLocalVarDef(var_def, elem_type);
+    }
 }
 
 void IRGenVisitor::VisitConstInitVal(ConstInitVal& const_init_val) {
-    // Implement (exercise): Evaluate constant initializer (ConstExp or list); result used by
-    // ConstDef.
+    // Initializer logic is inlined in VisitConstDef (temp_value_ cannot carry list).
+    (void)const_init_val;
 }
 
 void IRGenVisitor::VisitInitVal(InitVal& init_val) {
-    // Implement (exercise): Evaluate initializer (Exp or list); result stored by VarDef.
+    // Initializer logic is inlined in VisitVarDef.
+    (void)init_val;
 }
 
 // -----------------------------------------------------------------------------
@@ -271,7 +541,9 @@ void IRGenVisitor::VisitMainFuncDef(MainFuncDef& main_func_def) {
 }
 
 void IRGenVisitor::VisitFuncFParam(FuncFParam& func_f_param) {
-    // Implement (exercise): Create alloca for parameter (or register), bind name in scope.
+    // Parameters are set up in VisitFuncDef (alloca + store + RegisterVariable).
+    // This node is not visited during our traversal; no-op for safety.
+    (void)func_f_param;
 }
 
 // -----------------------------------------------------------------------------
@@ -286,7 +558,9 @@ void IRGenVisitor::VisitBlock(Block& block) {
 }
 
 void IRGenVisitor::VisitBlockStmt(BlockStmt& block_stmt) {
-    // Implement (exercise): Visit the inner Block (it will push/pop scope).
+    if (block_stmt.block) {
+        block_stmt.block->Accept(*this);
+    }
 }
 
 void IRGenVisitor::VisitAssignStmt(AssignStmt& assign_stmt) {
@@ -468,8 +742,75 @@ void IRGenVisitor::VisitGetcharStmt(GetcharStmt& getchar_stmt) {
 }
 
 void IRGenVisitor::VisitPrintfStmt(PrintfStmt& printf_stmt) {
-    // Implement (exercise): Parse format string, emit putint/putch/putstr calls for each format
-    // specifier and Exp.
+    // printf(format_string, exp_list): format_string can contain %d, %c and literal segments.
+    // We scan format_string once; for each literal segment emit putstr(global_str), for %d/%c
+    // emit putint/putch with the next exp from exp_list (order matches grammar).
+    if (!builder_->GetInsertBlock()) {
+        return;
+    }
+    const std::string& fmt = printf_stmt.format_string;
+    size_t exp_idx = 0;  // index into printf_stmt.exp_list for %d and %c
+    std::string literal; // current run of non-format chars (will be emitted as one putstr)
+
+    for (size_t i = 0; i < fmt.size(); ++i) {
+        if (fmt[i] == '%' && i + 1 < fmt.size()) {
+            // Flush any literal we accumulated before this format specifier.
+            if (!literal.empty()) {
+                ir::Value* str_ptr = EmitGlobalStringLiteral(literal);
+                if (str_ptr) {
+                    ir::Function* putstr_fn = module_->GetFunction("putstr");
+                    if (putstr_fn) {
+                        builder_->CreateCall(ir::GetVoidType(), putstr_fn, {str_ptr});
+                    }
+                }
+                literal.clear();
+            }
+            // Handle %d: evaluate next exp, call putint(val).
+            if (fmt[i + 1] == 'd') {
+                if (exp_idx < printf_stmt.exp_list.size()) {
+                    printf_stmt.exp_list[exp_idx]->Accept(*this);
+                    ir::Value* val = temp_value_;
+                    if (val) {
+                        ir::Function* putint_fn = module_->GetFunction("putint");
+                        if (putint_fn) {
+                            builder_->CreateCall(ir::GetVoidType(), putint_fn, {val});
+                        }
+                    }
+                    ++exp_idx;
+                }
+                ++i; // skip the 'd'
+            } else if (fmt[i + 1] == 'c') {
+                // Handle %c: evaluate next exp, call putch(val).
+                if (exp_idx < printf_stmt.exp_list.size()) {
+                    printf_stmt.exp_list[exp_idx]->Accept(*this);
+                    ir::Value* val = temp_value_;
+                    if (val) {
+                        ir::Function* putch_fn = module_->GetFunction("putch");
+                        if (putch_fn) {
+                            builder_->CreateCall(ir::GetVoidType(), putch_fn, {val});
+                        }
+                    }
+                    ++exp_idx;
+                }
+                ++i; // skip the 'c'
+            } else if (fmt[i + 1] == '%') {
+                ++i;
+            }
+        } else {
+            // Ordinary character: append to current literal segment.
+            literal.push_back(fmt[i]);
+        }
+    }
+    // Flush trailing literal (e.g. "\n" at end of "hello %d\n").
+    if (!literal.empty()) {
+        ir::Value* str_ptr = EmitGlobalStringLiteral(literal);
+        if (str_ptr) {
+            ir::Function* putstr_fn = module_->GetFunction("putstr");
+            if (putstr_fn) {
+                builder_->CreateCall(ir::GetVoidType(), putstr_fn, {str_ptr});
+            }
+        }
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -565,8 +906,7 @@ void IRGenVisitor::VisitBinaryExp(BinaryExp& binary_exp) {
 }
 
 void IRGenVisitor::VisitUnaryExp(UnaryExp& unary_exp) {
-    // Implement (exercise): Handle PrimaryExp (delegate to child), UnaryOp '-' (sub 0, x), '!'
-    // (icmp eq x, 0).
+    // PrimaryExp: delegate to child; PLUS: result already in temp_value_; MINU/NOT: handled below.
     unary_exp.operand->Accept(*this);
     ir::Value* operand = temp_value_;
     if (!operand || !builder_->GetInsertBlock()) {
@@ -593,16 +933,39 @@ void IRGenVisitor::VisitUnaryExp(UnaryExp& unary_exp) {
 }
 
 void IRGenVisitor::VisitFuncCall(FuncCall& func_call) {
-    // Implement (exercise): Look up function, visit FuncRParams for args, CreateCall; set
-    // temp_value_ if non-void.
+    ir::Function* callee = module_->GetFunction(func_call.ident);
+    if (!callee || !builder_->GetInsertBlock()) {
+        return;
+    }
+    call_args_.clear();
+    if (func_call.func_r_params) {
+        func_call.func_r_params->Accept(*this);
+    }
+    ir::Type* ret_type = nullptr;
+    if (ir::Type* ft = callee->GetType()) {
+        if (auto* fty = dynamic_cast<ir::FunctionType*>(ft)) {
+            ret_type = fty->GetReturnType();
+        }
+    }
+    ir::Instruction* call = builder_->CreateCall(ret_type, callee, call_args_);
+    if (call && ret_type && ret_type != ir::GetVoidType()) {
+        temp_value_ = call;
+    }
 }
 
 void IRGenVisitor::VisitFuncRParams(FuncRParams& func_r_params) {
-    // Implement (exercise): Visit each Exp, collect Value* args for the current call.
+    for (auto& exp : func_r_params.exp_list) {
+        exp->Accept(*this);
+        if (temp_value_) {
+            call_args_.push_back(temp_value_);
+        }
+    }
 }
 
 void IRGenVisitor::VisitConstExp(ConstExp& const_exp) {
     if (const_exp.const_value.has_value()) {
         temp_value_ = module_->GetInt32Constant(const_exp.const_value.value());
+    } else if (const_exp.inner) {
+        const_exp.inner->Accept(*this);
     }
 }

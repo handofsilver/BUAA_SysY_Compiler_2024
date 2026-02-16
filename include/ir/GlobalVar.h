@@ -25,6 +25,23 @@ namespace ir {
         GlobalVar() = default;
         GlobalVar(const std::string& name, Type* type) : Constant(name, type) {}
         virtual ~GlobalVar() = default;
+
+        Constant* GetInitializer() const {
+            return init_;
+        }
+        void SetInitializer(Constant* init) {
+            init_ = init;
+        }
+        bool IsConstant() const {
+            return is_constant_;
+        }
+        void SetConstant(bool c) {
+            is_constant_ = c;
+        }
+
+    private:
+        Constant* init_ = nullptr;
+        bool is_constant_ = false;
     };
 
 } // namespace ir

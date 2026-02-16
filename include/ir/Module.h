@@ -14,6 +14,8 @@
 #include "ir/GlobalVar.h"
 #include "ir/Type.h"
 
+#include <vector>
+
 #include <memory>
 #include <optional>
 #include <string>
@@ -58,6 +60,11 @@ namespace ir {
         PointerType* GetPointerType(Type* pointee_type);
 
         /**
+         * @brief Get or create an array type [N x element_type]. Owned by module.
+         */
+        ArrayType* GetArrayType(Type* element_type, unsigned num_elements);
+
+        /**
          * @brief Get or create an i32 constant. Returned pointer is valid for module lifetime.
          */
         ConstantInt* GetInt32Constant(int64_t value);
@@ -66,6 +73,11 @@ namespace ir {
          * @brief Get or create an i8 constant. Returned pointer is valid for module lifetime.
          */
         ConstantInt* GetInt8Constant(int64_t value);
+
+        /**
+         * @brief Create a constant array (owned by module). Used as global initializer.
+         */
+        ConstantArray* CreateConstantArray(ArrayType* type, const std::vector<Constant*>& elements);
 
         /**
          * @brief Get a function by name. Known lib I/O (getint, getchar, putint, putch, putstr)
@@ -82,7 +94,17 @@ namespace ir {
          * @return The new Function* (never nullptr).
          */
         Function* CreateFunction(const std::string& name, Type* return_type,
-                                const std::vector<Type*>& param_types);
+                                 const std::vector<Type*>& param_types);
+
+        /**
+         * @brief Create a global variable (or constant) with optional initializer.
+         * @param init If non-null, must be ConstantInt (scalar) or ConstantArray (array); module
+         *        does not take ownership of init (caller must ensure it lives, e.g. from
+         *        GetInt32Constant or CreateConstantArray). If null, global has zeroinitializer.
+         * @param is_constant True for const globals (ConstDef).
+         */
+        GlobalVar* CreateGlobalVar(const std::string& name, Type* type, Constant* init,
+                                   bool is_constant = false);
 
         /** Out-of-line destructor so TUs that only see Module do not need to destroy Instruction.
          */
@@ -115,6 +137,8 @@ namespace ir {
         std::vector<std::unique_ptr<ConstantInt>> constants_;
         std::unordered_map<int64_t, ConstantInt*> const_i32_cache_;
         std::unordered_map<int64_t, ConstantInt*> const_i8_cache_;
+        std::vector<std::unique_ptr<ArrayType>> array_types_;
+        std::vector<std::unique_ptr<Constant>> other_constants_;
     };
 
 } // namespace ir

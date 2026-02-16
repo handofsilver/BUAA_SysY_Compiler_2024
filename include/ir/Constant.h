@@ -12,6 +12,8 @@
 
 #include "ir/User.h"
 
+#include <vector>
+
 namespace ir {
 
     /**
@@ -44,6 +46,26 @@ namespace ir {
 
     private:
         int64_t value_;
+    };
+
+    class ArrayType; // forward
+
+    /**
+     * @brief Constant array (e.g. [3 x i32] [i32 1, i32 2, i32 3]).
+     * Used as global array initializer. Elements are not owned (typically ConstantInt from Module).
+     */
+    class ConstantArray : public Constant {
+    public:
+        ConstantArray(const std::string& name, ArrayType* type,
+                      const std::vector<Constant*>& elements) :
+        Constant(name, type),
+        elements_(elements) {}
+        const std::vector<Constant*>& GetElements() const {
+            return elements_;
+        }
+
+    private:
+        std::vector<Constant*> elements_;
     };
 } // namespace ir
 

@@ -122,6 +122,9 @@ private:
     int next_scope_id_ = 1;
     int current_scope_id_ = 0;
 
+    /** BType of the current Decl (ConstDecl/VarDecl) for VisitConstDef/VisitVarDef. */
+    BType current_decl_btype_ = BType::INT;
+
     /** @brief Look up a variable by name in the scope chain (inner to outer). */
     ir::Value* LookupVariable(const std::string& name) const;
 
@@ -146,4 +149,47 @@ private:
      * @return The AllocaInst*, or nullptr if no current function or entry block.
      */
     ir::Instruction* CreateEntryBlockAlloca(ir::Type* type, const std::string& name = "");
+
+    /**
+     * @brief Evaluate a constant integer expression at compile time.
+     * Supports: Number, ConstExp (via inner), UnaryExp (+/-), BinaryExp (+ - * / %).
+     * Unsupported cases (e.g. LVal, function call) return 0.
+     */
+    int GetConstIntVal(Exp* exp);
+
+    // -------------------------------------------------------------------------
+    // Helpers for variable/constant definition (modularize VisitConstDef/VisitVarDef)
+    // -------------------------------------------------------------------------
+
+    /** Element type (i32 or i8) from current_decl_btype_. */
+    ir::Type* GetCurDeclType() const;
+
+    /** Array size from a ConstExp (e.g. array_size); returns >= 1. */
+    int EvalArraySizeFromConstExp(ConstExp* cexp);
+
+    /** Build a constant scalar initializer (i32 or i8 constant). */
+    ir::Constant* BuildConstScalarInit(int val) const;
+
+    /** Build a constant array initializer from a list of integer values. */
+    ir::Constant* BuildConstArrayInit(ir::ArrayType* arr_ty, const std::vector<int>& values) const;
+
+    void EmitGlobalConstDef(ConstDef& const_def, ir::Type* elem_type);
+    void EmitLocalConstDef(ConstDef& const_def, ir::Type* elem_type);
+    void EmitGlobalVarDef(VarDef& var_def, ir::Type* elem_type);
+    void EmitLocalVarDef(VarDef& var_def, ir::Type* elem_type);
+
+    /**
+     * @brief Create a global constant string (i8 array, null-terminated) for printf; returns
+     * pointer Value* to pass to putstr. Uses printf_str_counter_ for unique names.
+     */
+    ir::Value* EmitGlobalStringLiteral(const std::string& str);
+
+    /** Counter for unique .str.N names in printf string literals. */
+    int printf_str_counter_ = 0;
+
+    /**
+     * @brief Arguments for the current function call (filled by VisitFuncRParams, used by
+     * VisitFuncCall).
+     */
+    std::vector<ir::Value*> call_args_;
 };

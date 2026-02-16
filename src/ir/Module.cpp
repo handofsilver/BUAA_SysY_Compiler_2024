@@ -49,6 +49,25 @@ namespace ir {
         return integer_types_[2].get();
     }
 
+    ArrayType* Module::GetArrayType(Type* element_type, unsigned num_elements) {
+        if (!element_type) {
+            return nullptr;
+        }
+        array_types_.push_back(std::make_unique<ArrayType>(element_type, num_elements));
+        return array_types_.back().get();
+    }
+
+    ConstantArray* Module::CreateConstantArray(ArrayType* type,
+                                               const std::vector<Constant*>& elements) {
+        if (!type) {
+            return nullptr;
+        }
+        auto c = std::make_unique<ConstantArray>("", type, elements);
+        ConstantArray* p = c.get();
+        other_constants_.push_back(std::move(c));
+        return p;
+    }
+
     ConstantInt* Module::GetInt32Constant(int64_t value) {
         auto it = const_i32_cache_.find(value);
         if (it != const_i32_cache_.end()) {
@@ -130,5 +149,14 @@ namespace ir {
         Function* ptr = func.get();
         functions_.push_back(std::move(func));
         return ptr;
+    }
+
+    GlobalVar* Module::CreateGlobalVar(const std::string& name, Type* type, Constant* init,
+                                       bool is_constant) {
+        global_vars_.push_back(std::make_unique<GlobalVar>(name, type));
+        GlobalVar* g = global_vars_.back().get();
+        g->SetInitializer(init);
+        g->SetConstant(is_constant);
+        return g;
     }
 } // namespace ir
