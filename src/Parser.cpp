@@ -584,6 +584,25 @@ std::unique_ptr<Stmt> Parser::ParseOtherStmt() {
         return std::make_unique<ExpStmt>(std::nullopt);
     }
 
+    // [Exp] ';' where Exp does not start with LVal: '(' | Number | Character | UnaryOp
+    if (CurIs(TokenType::LPARENT) || CurIs(TokenType::INTCON) || CurIs(TokenType::CHRCON) ||
+        CurIs(TokenType::PLUS) || CurIs(TokenType::MINU) || CurIs(TokenType::NOT)) {
+        std::unique_ptr<Exp> exp = ParseExp();
+        ExpectSemicolon();
+        EmitSyntax("<Stmt>");
+        return std::make_unique<ExpStmt>(std::make_optional(std::move(exp)));
+    }
+
+    // Ident '(' -> function call, i.e. [Exp] ';' (grammar: UnaryExp -> Ident '(' [FuncRParams] ')'
+    // )
+    if (CurIs(TokenType::IDENFR) && LookaheadIs(TokenType::LPARENT)) {
+        std::unique_ptr<Exp> exp = ParseExp();
+        ExpectSemicolon();
+        EmitSyntax("<Stmt>");
+        return std::make_unique<ExpStmt>(std::make_optional(std::move(exp)));
+    }
+
+    // LVal '=' ... or [Exp] ';' starting with LVal (Ident or Ident '[' Exp ']')
     std::unique_ptr<LVal> lval = ParseLVal();
     if (CurIs(TokenType::ASSIGN)) {
         Advance();

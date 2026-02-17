@@ -168,7 +168,8 @@ private:
      * @param name Optional name for the alloca result.
      * @return The AllocaInst*, or nullptr if no current function or entry block.
      */
-    ir::Instruction* CreateEntryBlockAlloca(ir::Type* type, const std::string& name = "");
+    /** @brief Create alloca in entry block; name is next SSA number from builder_. */
+    ir::Instruction* CreateEntryBlockAlloca(ir::Type* type);
 
     /**
      * @brief Evaluate a constant integer expression at compile time.

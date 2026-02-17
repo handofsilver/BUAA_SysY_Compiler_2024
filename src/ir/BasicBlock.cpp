@@ -1,6 +1,6 @@
 /**
  * @file BasicBlock.cpp
- * @brief Implementation of BasicBlock: AddInstruction (set parent + append), destructor.
+ * @brief Implementation of BasicBlock: AddInstruction, Print, destructor.
  *
  * Instruction.h is included here so that unique_ptr<Instruction> can be destroyed
  * and so that inst->SetParent(this) can be called.
@@ -8,10 +8,25 @@
 
 #include "ir/BasicBlock.h"
 #include "ir/Instruction.h"
+#include <ostream>
 
 namespace ir {
 
     BasicBlock::~BasicBlock() = default;
+
+    void BasicBlock::PrintAsOperand(std::ostream& os) const {
+        os << "label %" << (GetName().empty() ? "0" : GetName());
+    }
+
+    void BasicBlock::Print(std::ostream& os) const {
+        os << (GetName().empty() ? "0" : GetName()) << ":\n";
+        for (const auto& inst : instructions_) {
+            if (inst) {
+                inst->Print(os);
+                os << "\n";
+            }
+        }
+    }
 
     std::list<std::unique_ptr<Instruction>>& BasicBlock::GetInstructions() {
         return instructions_;

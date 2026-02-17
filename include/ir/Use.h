@@ -5,9 +5,7 @@
  * A Use links a User (e.g. an Instruction) to a Value it uses (e.g. an operand).
  * Each Use belongs to exactly one User and references exactly one Value.
  */
-
-#ifndef IR_USE_H
-#define IR_USE_H
+#pragma once
 
 namespace ir {
 
@@ -57,5 +55,3 @@ namespace ir {
     };
 
 } // namespace ir
-
-#endif // IR_USE_H

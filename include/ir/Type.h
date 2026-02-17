@@ -5,10 +5,9 @@
  * Types represent the shape of values (void, label, integer, pointer, function).
  * Used by Value and related IR classes for type checking and IR printing.
  */
+#pragma once
 
-#ifndef IR_TYPE_H
-#define IR_TYPE_H
-
+#include <ostream>
 #include <vector>
 
 namespace ir {
@@ -41,6 +40,9 @@ namespace ir {
             type_id_ = id;
         }
 
+        /** @brief Print this type to LLVM IR text (e.g. i32, ptr, void). */
+        virtual void Print(std::ostream& os) const = 0;
+
     protected:
         TypeID type_id_;
     };
@@ -59,6 +61,8 @@ namespace ir {
         void SetBits(unsigned bits) {
             bits_ = bits;
         }
+
+        void Print(std::ostream& os) const override;
 
     private:
         unsigned bits_;
@@ -81,6 +85,8 @@ namespace ir {
             pointee_type_ = t;
         }
 
+        void Print(std::ostream& os) const override;
+
     private:
         Type* pointee_type_;
     };
@@ -102,6 +108,8 @@ namespace ir {
         unsigned GetNumElements() const {
             return num_elements_;
         }
+
+        void Print(std::ostream& os) const override;
 
     private:
         Type* element_type_;
@@ -131,6 +139,8 @@ namespace ir {
             return param_types_;
         }
 
+        void Print(std::ostream& os) const override;
+
     private:
         Type* return_type_;
         std::vector<Type*> param_types_;
@@ -142,6 +152,9 @@ namespace ir {
     class VoidType : public Type {
     public:
         VoidType() : Type(TypeID::VOID_TY_ID) {}
+        void Print(std::ostream& os) const override {
+            os << "void";
+        }
     };
 
     /**
@@ -150,16 +163,9 @@ namespace ir {
     class LabelType : public Type {
     public:
         LabelType() : Type(TypeID::LABEL_TY_ID) {}
+        void Print(std::ostream& os) const override {
+            os << "label";
+        }
     };
 
-    /**
-     * @brief Returns the canonical void type (singleton). Used e.g. for ret void.
-     */
-    inline Type* GetVoidType() {
-        static VoidType v;
-        return &v;
-    }
-
 } // namespace ir
-
-#endif // IR_TYPE_H

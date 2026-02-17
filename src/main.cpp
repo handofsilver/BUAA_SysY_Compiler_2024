@@ -1,9 +1,9 @@
 /**
- * Compiler driver (requirement_2 parser + requirement_3 semantic analysis).
- * Reads testfile.txt, runs Lexer -> Parser -> SemanticAnalyzer.
- * Output: error.txt (any lexer/parser/semantic errors) or symbol.txt (no errors).
- * Requirement: symbol output shall be easy to turn off (e.g. for full compiler).
+ * Compiler driver (requirement_2 parser + requirement_3 semantic analysis + requirement_5 codegen).
+ * Reads testfile.txt, runs Lexer -> Parser -> SemanticAnalyzer [-> IRGenVisitor].
+ * Output: error.txt (any errors) or symbol.txt + llvm_ir.txt (no errors).
  */
+#include "IRGenVisitor.h"
 #include "Lexer.h"
 #include "Parser.h"
 #include "SemanticAnalyzer.h"
@@ -77,24 +77,31 @@ int main() {
                   });
 
         const bool kEmitSymbolOutput =
-            true; // set false to disable symbol.txt (e.g. for full compiler)
+            false; // set false to disable symbol.txt (e.g. for full compiler)
 
         if (!all_errors.empty()) {
             std::ofstream err("error.txt");
             for (const auto& p : all_errors) {
                 err << p.first << " " << p.second << "\n";
             }
-        } else if (analyzer && kEmitSymbolOutput) {
-            std::ofstream out("symbol.txt");
+        } else if (comp_unit && analyzer) {
+            if (kEmitSymbolOutput) {
+                std::ofstream out("symbol.txt");
+                std::vector<std::pair<int, Symbol>> ordered_symbols = analyzer->GetOrderedSymbols();
+                std::sort(ordered_symbols.begin(), ordered_symbols.end(),
+                          [](const std::pair<int, Symbol>& a, const std::pair<int, Symbol>& b) {
+                              return a.first < b.first;
+                          });
+                for (const auto& p : ordered_symbols) {
+                    out << p.second.FormatForOutput() << "\n";
+                }
+            }
 
-            std::vector<std::pair<int, Symbol>> ordered_symbols = analyzer->GetOrderedSymbols();
-            std::sort(ordered_symbols.begin(), ordered_symbols.end(),
-                      [](const std::pair<int, Symbol>& a, const std::pair<int, Symbol>& b) {
-                          return a.first < b.first;
-                      });
-
-            for (const auto& p : ordered_symbols) {
-                out << p.second.FormatForOutput() << "\n";
+            IRGenVisitor ir_gen;
+            std::unique_ptr<ir::Module> module = ir_gen.Translate(*comp_unit);
+            if (module) {
+                std::ofstream llvm_out("llvm_ir.txt");
+                module->Print(llvm_out);
             }
         }
 

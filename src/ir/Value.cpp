@@ -1,12 +1,17 @@
 /**
  * @file Value.cpp
- * @brief Implementation of Value: use-list and ReplaceAllUsesWith.
+ * @brief Implementation of Value: use-list, ReplaceAllUsesWith, PrintAsOperand.
  */
 
 #include "ir/Value.h"
 #include "ir/Use.h"
+#include <ostream>
 
 namespace ir {
+
+    void Value::PrintAsOperand(std::ostream& os) const {
+        os << "%" << (name_.empty() ? "0" : name_);
+    }
 
     void Value::ReplaceAllUsesWith(Value* new_val) {
         if (!new_val) {

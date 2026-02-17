@@ -5,13 +5,14 @@
  * All definitions are in the header so that template Create<InstType, Args...> can be
  * instantiated at call sites. Non-template helpers are inline here for simplicity.
  */
-#ifndef IR_BUILDER_H
-#define IR_BUILDER_H
+#pragma once
 
 #include "ir/BasicBlock.h"
 #include "ir/Instruction.h"
+#include "ir/Module.h"
 #include "ir/Type.h"
 #include <AST.h>
+#include <string>
 #include <vector>
 
 namespace ir {
@@ -38,6 +39,23 @@ namespace ir {
         /** @brief Get the current insertion block, or nullptr if none set. */
         BasicBlock* GetInsertBlock() const {
             return insert_point_;
+        }
+
+        /** @brief Set the module (for GetVoidType in CreateRetVoid). Call after SetInsertPoint when
+         * generating. */
+        void SetModule(Module* m) {
+            module_ = m;
+        }
+
+        /** @brief Reset SSA counter (call at function entry). Next GetNextSSAName() will return \p
+         * start. Use param count so params stay %0,%1,... and first alloca/inst is %param_count. */
+        void ResetSSACounter(int start = 0) {
+            ssa_counter_ = start;
+        }
+
+        /** @brief Return next SSA name (e.g. "1", "2") for value-producing instructions. */
+        std::string GetNextSSAName() {
+            return std::to_string(ssa_counter_++);
         }
 
         // -------------------------------------------------------------------------
@@ -70,7 +88,7 @@ namespace ir {
             if (!bb || !type) {
                 return nullptr;
             }
-            return Create<AllocaInst>("", type, bb);
+            return Create<AllocaInst>(GetNextSSAName(), type, bb);
         }
 
         /**
@@ -88,7 +106,7 @@ namespace ir {
                 return nullptr;
             }
             Type* elem_ty = ptr_ty->GetPointeeType();
-            return Create<LoadInst>("", elem_ty, bb, ptr);
+            return Create<LoadInst>(GetNextSSAName(), elem_ty, bb, ptr);
         }
 
         /** @brief Create store: store value into ptr. */
@@ -110,7 +128,7 @@ namespace ir {
             if (!bb || !lhs || !rhs) {
                 return nullptr;
             }
-            return Create<BinaryInst>("", lhs->GetType(), bb, op, lhs, rhs);
+            return Create<BinaryInst>(GetNextSSAName(), lhs->GetType(), bb, op, lhs, rhs);
         }
 
         // -------------------------------------------------------------------------
@@ -144,13 +162,14 @@ namespace ir {
             return Create<ReturnInst>("", val->GetType(), bb, val);
         }
 
-        /** @brief Create return without value: ret void. */
+        /** @brief Create return without value: ret void. Requires SetModule() to have been called.
+         */
         Instruction* CreateRetVoid() {
             BasicBlock* bb = GetInsertBlock();
-            if (!bb) {
+            if (!bb || !module_) {
                 return nullptr;
             }
-            return Create<ReturnInst>("", GetVoidType(), bb);
+            return Create<ReturnInst>("", module_->GetVoidType(), bb);
         }
 
         // -------------------------------------------------------------------------
@@ -166,7 +185,7 @@ namespace ir {
             if (!bb || !callee) {
                 return nullptr;
             }
-            return Create<CallInst>("", ret_type, bb, callee, args);
+            return Create<CallInst>(GetNextSSAName(), ret_type, bb, callee, args);
         }
 
         /** @brief Create getelementptr with one index: base + index. */
@@ -175,7 +194,7 @@ namespace ir {
             if (!bb || !base || !index) {
                 return nullptr;
             }
-            return Create<GetElementPtrInst>("", result_ptr_type, bb, base, index);
+            return Create<GetElementPtrInst>(GetNextSSAName(), result_ptr_type, bb, base, index);
         }
 
         /**
@@ -186,7 +205,8 @@ namespace ir {
             if (!bb || !base || !index0 || !index1) {
                 return nullptr;
             }
-            return Create<GetElementPtrInst>("", result_ptr_type, bb, base, index0, index1);
+            return Create<GetElementPtrInst>(GetNextSSAName(), result_ptr_type, bb, base, index0,
+                                             index1);
         }
 
         /** @brief Create icmp: result is i1. Pass GetI1Type() from Module as result_type. */
@@ -195,7 +215,7 @@ namespace ir {
             if (!bb || !result_type || !lhs || !rhs) {
                 return nullptr;
             }
-            return Create<IcmpInst>("", result_type, bb, pred, lhs, rhs);
+            return Create<IcmpInst>(GetNextSSAName(), result_type, bb, pred, lhs, rhs);
         }
 
         /** @brief Create zext from value to dest_type (e.g. i1 to i32). */
@@ -204,7 +224,7 @@ namespace ir {
             if (!bb || !value || !dest_type) {
                 return nullptr;
             }
-            return Create<ZextInst>("", dest_type, bb, value);
+            return Create<ZextInst>(GetNextSSAName(), dest_type, bb, value);
         }
 
         /** @brief Create trunc from value to dest_type (e.g. i32 to i8). */
@@ -213,13 +233,13 @@ namespace ir {
             if (!bb || !value || !dest_type) {
                 return nullptr;
             }
-            return Create<TruncInst>("", dest_type, bb, value);
+            return Create<TruncInst>(GetNextSSAName(), dest_type, bb, value);
         }
 
     private:
         BasicBlock* insert_point_ = nullptr;
+        Module* module_ = nullptr;
+        int ssa_counter_ = 0;
     };
 
 } // namespace ir
-
-#endif // IR_BUILDER_H

@@ -5,14 +5,13 @@
  * Value is the root of the IR hierarchy. Every value has a type and a name,
  * and maintains a list of Use objects that reference it (def-use chain).
  */
-
-#ifndef IR_VALUE_H
-#define IR_VALUE_H
+#pragma once
 
 #include "ir/Type.h"
 #include "ir/Use.h"
 
 #include <list>
+#include <ostream>
 #include <string>
 
 namespace ir {
@@ -71,9 +70,14 @@ namespace ir {
         /**
          * @brief Replace every use of this Value with new_val.
          * Used by SSA substitution and optimizations.
-         * TODO: implement; update all Users that reference this Value.
          */
         void ReplaceAllUsesWith(Value* new_val);
+
+        /**
+         * @brief Print this value as an operand (e.g. %1, @main, i32 0).
+         * Overridden by ConstantInt, GlobalVar, Function, Argument, BasicBlock.
+         */
+        virtual void PrintAsOperand(std::ostream& os) const;
 
     protected:
         std::string name_;
@@ -82,5 +86,3 @@ namespace ir {
     };
 
 } // namespace ir
-
-#endif // IR_VALUE_H

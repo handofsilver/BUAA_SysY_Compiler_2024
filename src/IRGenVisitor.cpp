@@ -35,11 +35,11 @@ namespace {
 
     /**
      * Map BType to IR type for function return (FuncType: void | int | char).
-     * Caller must have Module* to get i32/i8; void is from GetVoidType().
+     * Caller must have Module* to get i32/i8/void.
      */
     ir::Type* BTypeToReturnType(BType btype, ir::Module* module) {
         switch (btype) {
-            case BType::VOID: return ir::GetVoidType();
+            case BType::VOID: return module->GetVoidType();
             case BType::INT: return module->GetI32Type();
             case BType::CHAR: return module->GetI8Type();
             default: return module->GetI32Type();
@@ -72,6 +72,7 @@ namespace {
 IRGenVisitor::IRGenVisitor() {
     module_ = std::make_unique<ir::Module>();
     builder_ = std::make_unique<ir::IRBuilder>();
+    builder_->SetModule(module_.get());
 }
 
 std::unique_ptr<ir::Module> IRGenVisitor::Translate(CompUnit& comp_unit) {
@@ -153,7 +154,7 @@ ir::Value* IRGenVisitor::CoerceToI1(ir::Value* cond_val) {
 }
 
 void IRGenVisitor::EmitShortCircuitAND(Exp* lhs, Exp* rhs) {
-    ir::Instruction* result_slot = CreateEntryBlockAlloca(module_->GetI32Type(), "");
+    ir::Instruction* result_slot = CreateEntryBlockAlloca(module_->GetI32Type());
     if (!result_slot || !builder_->GetInsertBlock()) {
         return;
     }
@@ -195,7 +196,7 @@ void IRGenVisitor::EmitShortCircuitAND(Exp* lhs, Exp* rhs) {
 }
 
 void IRGenVisitor::EmitShortCircuitOR(Exp* lhs, Exp* rhs) {
-    ir::Instruction* result_slot = CreateEntryBlockAlloca(module_->GetI32Type(), "");
+    ir::Instruction* result_slot = CreateEntryBlockAlloca(module_->GetI32Type());
     if (!result_slot || !builder_->GetInsertBlock()) {
         return;
     }
@@ -236,8 +237,8 @@ void IRGenVisitor::EmitShortCircuitOR(Exp* lhs, Exp* rhs) {
     temp_value_ = load ? load : result_slot;
 }
 
-ir::Instruction* IRGenVisitor::CreateEntryBlockAlloca(ir::Type* type, const std::string& name) {
-    if (!current_function_ || !type) {
+ir::Instruction* IRGenVisitor::CreateEntryBlockAlloca(ir::Type* type) {
+    if (!current_function_ || !type || !builder_) {
         return nullptr;
     }
     const auto& blocks = current_function_->GetBlocks();
@@ -247,6 +248,7 @@ ir::Instruction* IRGenVisitor::CreateEntryBlockAlloca(ir::Type* type, const std:
     ir::BasicBlock* entry = blocks.front().get();
     ir::Type* ptr_type =
         module_->GetPointerType(type); // alloca result is pointer to allocated type
+    std::string name = builder_->GetNextSSAName();
     auto inst = std::make_unique<ir::AllocaInst>(name, ptr_type, entry);
     ir::Instruction* result = inst.get();
     entry->AddInstruction(std::move(inst)); // append to entry; no insert-point change (allocas stay
@@ -426,7 +428,7 @@ void IRGenVisitor::EmitLocalConstDef(ConstDef& const_def, ir::Type* elem_type) {
         // Local const array: alloca [N x T], then GEP+Store for each element
         int n = EvalArraySizeFromConstExp(const_def.array_size->get());
         ir::ArrayType* arr_ty = module_->GetArrayType(elem_type, static_cast<unsigned>(n));
-        ir::Instruction* alloca = CreateEntryBlockAlloca(arr_ty, const_def.ident);
+        ir::Instruction* alloca = CreateEntryBlockAlloca(arr_ty);
         RegisterVariable(const_def.ident, alloca);
 
         auto* list = std::get_if<ConstInitVal::ExpList>(&const_def.const_init_val->value);
@@ -444,7 +446,7 @@ void IRGenVisitor::EmitLocalConstDef(ConstDef& const_def, ir::Type* elem_type) {
         }
     } else {
         // Local const scalar: alloca T, Store constant
-        ir::Instruction* alloca = CreateEntryBlockAlloca(elem_type, const_def.ident);
+        ir::Instruction* alloca = CreateEntryBlockAlloca(elem_type);
         RegisterVariable(const_def.ident, alloca);
 
         int val = 0;
@@ -509,7 +511,7 @@ void IRGenVisitor::EmitLocalVarDef(VarDef& var_def, ir::Type* elem_type) {
             n = EvalArraySizeFromConstExp(var_def.array_size->get());
         }
         ir::ArrayType* arr_ty = module_->GetArrayType(elem_type, static_cast<unsigned>(n));
-        ir::Instruction* alloca = CreateEntryBlockAlloca(arr_ty, var_def.ident);
+        ir::Instruction* alloca = CreateEntryBlockAlloca(arr_ty);
         RegisterVariable(var_def.ident, alloca);
 
         // If init present: visit each Exp in the list (runtime eval), then GEP + Store.
@@ -520,6 +522,7 @@ void IRGenVisitor::EmitLocalVarDef(VarDef& var_def, ir::Type* elem_type) {
                     (*list)[i]->Accept(*this);
                     ir::Value* val = temp_value_;
                     if (val) {
+                        val = ConvertToTargetType(val, elem_type);
                         ir::Value* idx = module_->GetInt32Constant(static_cast<int64_t>(i));
                         ir::Instruction* gep =
                             builder_->CreateGEP(module_->GetPointerType(elem_type), alloca,
@@ -533,16 +536,18 @@ void IRGenVisitor::EmitLocalVarDef(VarDef& var_def, ir::Type* elem_type) {
         }
     } else {
         // --- Local var scalar: alloca T, optional Store(exp result) ---
-        ir::Instruction* alloca = CreateEntryBlockAlloca(elem_type, var_def.ident);
+        ir::Instruction* alloca = CreateEntryBlockAlloca(elem_type);
         RegisterVariable(var_def.ident, alloca);
 
-        // If init present: visit the single Exp, then Store(temp_value_, alloca).
+        // If init present: visit the single Exp, convert to elem_type, then Store.
         if (var_def.init_val && builder_->GetInsertBlock()) {
             auto* single = std::get_if<InitVal::SingleExp>(&var_def.init_val->value);
             if (single && single->get()) {
                 (*single)->Accept(*this);
-                if (temp_value_) {
-                    builder_->CreateStore(temp_value_, alloca);
+                ir::Value* val =
+                    temp_value_ ? ConvertToTargetType(temp_value_, elem_type) : nullptr;
+                if (val) {
+                    builder_->CreateStore(val, alloca);
                 }
             }
         }
@@ -573,13 +578,13 @@ void IRGenVisitor::VisitCompUnit(CompUnit& comp_unit) {
     for (auto& d : comp_unit.decls) {
         d->Accept(*this);
     }
+    is_global_ = false;
     for (auto& f : comp_unit.func_defs) {
         f->Accept(*this);
     }
     if (comp_unit.main_func_def) {
         comp_unit.main_func_def->Accept(*this);
     }
-    is_global_ = false;
 }
 
 void IRGenVisitor::VisitConstDecl(ConstDecl& const_decl) {
@@ -637,17 +642,12 @@ void IRGenVisitor::VisitFuncDef(FuncDef& func_def) {
         param_types.push_back(BTypeToParamType(p->btype, p->is_array, module_.get()));
     }
     ir::Function* func = module_->CreateFunction(func_def.ident, return_type, param_types);
-    for (size_t i = 0; i < func_def.func_f_params.size(); ++i) {
-        ir::Argument* arg = func->GetArgument(i);
-        if (arg) {
-            arg->SetName(func_def.func_f_params[i]->ident);
-        }
-    }
     current_function_ = func;
     IRScopeGuard scope_guard(*this); // RAII: PopScope on exit
 
     ir::BasicBlock* entry = CreateBasicBlock("entry");
     builder_->SetInsertPoint(entry);
+    builder_->ResetSSACounter(static_cast<int>(func_def.func_f_params.size()));
 
     for (size_t i = 0; i < func_def.func_f_params.size(); ++i) {
         const auto& p = func_def.func_f_params[i];
@@ -661,7 +661,7 @@ void IRGenVisitor::VisitFuncDef(FuncDef& func_def) {
         } else {
             // scalar: alloca a slot in entry, store incoming value, bind alloca address
             ir::Type* alloc_ty = BTypeToAllocaType(p->btype, module_.get());
-            ir::Instruction* alloca_inst = CreateEntryBlockAlloca(alloc_ty, p->ident);
+            ir::Instruction* alloca_inst = CreateEntryBlockAlloca(alloc_ty);
             if (alloca_inst && builder_->GetInsertBlock()) {
                 builder_->CreateStore(arg_val, alloca_inst);
                 RegisterVariable(p->ident, alloca_inst);
@@ -683,6 +683,7 @@ void IRGenVisitor::VisitMainFuncDef(MainFuncDef& main_func_def) {
 
     ir::BasicBlock* entry = CreateBasicBlock("entry");
     builder_->SetInsertPoint(entry);
+    builder_->ResetSSACounter(0);
 
     main_func_def.block->Accept(*this);
 
@@ -857,7 +858,7 @@ void IRGenVisitor::VisitReturnStmt(ReturnStmt& return_stmt) {
             ir::Type* ft = current_function_->GetType();
             if (auto* fty = dynamic_cast<ir::FunctionType*>(ft)) {
                 ir::Type* ret_ty = fty->GetReturnType();
-                if (ret_ty && ret_ty != ir::GetVoidType()) {
+                if (ret_ty && ret_ty != module_->GetVoidType()) {
                     val = ConvertToTargetType(val, ret_ty);
                 }
             }
@@ -915,7 +916,7 @@ void IRGenVisitor::VisitPrintfStmt(PrintfStmt& printf_stmt) {
                 if (str_ptr) {
                     ir::Function* putstr_fn = module_->GetFunction("putstr");
                     if (putstr_fn) {
-                        builder_->CreateCall(ir::GetVoidType(), putstr_fn, {str_ptr});
+                        builder_->CreateCall(module_->GetVoidType(), putstr_fn, {str_ptr});
                     }
                 }
                 literal.clear();
@@ -928,7 +929,7 @@ void IRGenVisitor::VisitPrintfStmt(PrintfStmt& printf_stmt) {
                     if (val) {
                         ir::Function* putint_fn = module_->GetFunction("putint");
                         if (putint_fn) {
-                            builder_->CreateCall(ir::GetVoidType(), putint_fn, {val});
+                            builder_->CreateCall(module_->GetVoidType(), putint_fn, {val});
                         }
                     }
                     ++exp_idx;
@@ -942,7 +943,7 @@ void IRGenVisitor::VisitPrintfStmt(PrintfStmt& printf_stmt) {
                     if (val) {
                         ir::Function* putch_fn = module_->GetFunction("putch");
                         if (putch_fn) {
-                            builder_->CreateCall(ir::GetVoidType(), putch_fn, {val});
+                            builder_->CreateCall(module_->GetVoidType(), putch_fn, {val});
                         }
                     }
                     ++exp_idx;
@@ -963,7 +964,7 @@ void IRGenVisitor::VisitPrintfStmt(PrintfStmt& printf_stmt) {
         if (str_ptr) {
             ir::Function* putstr_fn = module_->GetFunction("putstr");
             if (putstr_fn) {
-                builder_->CreateCall(ir::GetVoidType(), putstr_fn, {str_ptr});
+                builder_->CreateCall(module_->GetVoidType(), putstr_fn, {str_ptr});
             }
         }
     }
@@ -1003,6 +1004,8 @@ void IRGenVisitor::VisitLVal(LVal& lval) {
     if (!index_val || !builder_->GetInsertBlock()) {
         return;
     }
+    // GEP indices must be integer; ensure i32 (e.g. char index promoted).
+    index_val = PromoteToI32(index_val);
     auto* ptr_ty = dynamic_cast<ir::PointerType*>(value->GetType());
     if (!ptr_ty) {
         temp_value_ = value;
@@ -1135,7 +1138,7 @@ void IRGenVisitor::VisitFuncCall(FuncCall& func_call) {
         converted_args.push_back(arg);
     }
     ir::Instruction* call = builder_->CreateCall(ret_type, callee, converted_args);
-    if (call && ret_type && ret_type != ir::GetVoidType()) {
+    if (call && ret_type && ret_type != module_->GetVoidType()) {
         temp_value_ = call;
     }
 }

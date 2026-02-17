@@ -4,11 +4,10 @@
  *
  * Ownership: Function owns its Arguments (vector of unique_ptr).
  */
-
-#ifndef IR_ARGUMENT_H
-#define IR_ARGUMENT_H
+#pragma once
 
 #include "ir/Value.h"
+#include <ostream>
 
 namespace ir {
 
@@ -20,8 +19,8 @@ namespace ir {
     public:
         Argument() = default;
         Argument(const std::string& name, Type* type) : Value(name, type) {}
+
+        void PrintAsOperand(std::ostream& os) const override;
     };
 
 } // namespace ir
-
-#endif // IR_ARGUMENT_H

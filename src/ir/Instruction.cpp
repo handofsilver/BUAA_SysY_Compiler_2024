@@ -4,8 +4,38 @@
  */
 #include "ir/Instruction.h"
 #include "ir/BasicBlock.h"
+#include "ir/Constant.h"
+#include "ir/Type.h"
+#include <ostream>
 
 namespace ir {
+
+    namespace {
+        const char* OpTypeToMnemonic(OpType op) {
+            switch (op) {
+                case OpType::ADD: return "add";
+                case OpType::SUB: return "sub";
+                case OpType::MUL: return "mul";
+                case OpType::DIV: return "sdiv";
+                case OpType::MOD: return "srem";
+                default: return "add";
+            }
+        }
+        bool OpTypeHasNsw(OpType op) {
+            return op == OpType::ADD || op == OpType::SUB || op == OpType::MUL;
+        }
+        const char* IcmpPredToMnemonic(IcmpPred pred) {
+            switch (pred) {
+                case IcmpPred::SLT: return "slt";
+                case IcmpPred::SGT: return "sgt";
+                case IcmpPred::SLE: return "sle";
+                case IcmpPred::SGE: return "sge";
+                case IcmpPred::EQ: return "eq";
+                case IcmpPred::NE: return "ne";
+                default: return "eq";
+            }
+        }
+    } // namespace
 
     // -----------------------------------------------------------------------------
     // Instruction (base)
@@ -32,6 +62,19 @@ namespace ir {
     AllocaInst::AllocaInst(const std::string& name, Type* type, BasicBlock* parent) :
     Instruction(name, type, parent) {}
 
+    void AllocaInst::Print(std::ostream& os) const {
+        os << "  %" << GetName() << " = alloca ";
+        if (type_) {
+            PointerType* pt = dynamic_cast<PointerType*>(type_);
+            if (pt && pt->GetPointeeType()) {
+                pt->GetPointeeType()->Print(os);
+            } else {
+                type_->Print(os);
+            }
+        }
+        os << ", align 4";
+    }
+
     // -----------------------------------------------------------------------------
     // LoadInst
     // -----------------------------------------------------------------------------
@@ -45,6 +88,18 @@ namespace ir {
 
     Value* LoadInst::GetPointerOperand() const {
         return GetOperand(0);
+    }
+
+    void LoadInst::Print(std::ostream& os) const {
+        os << "  %" << GetName() << " = load ";
+        if (type_) {
+            type_->Print(os);
+        }
+        os << ", ptr ";
+        if (Value* ptr = GetPointerOperand()) {
+            ptr->PrintAsOperand(os);
+        }
+        os << ", align 4";
     }
 
     // -----------------------------------------------------------------------------
@@ -66,6 +121,28 @@ namespace ir {
 
     Value* StoreInst::GetPointerOperand() const {
         return GetOperand(1);
+    }
+
+    void StoreInst::Print(std::ostream& os) const {
+        Value* val = GetValueOperand();
+        Value* ptr = GetPointerOperand();
+        os << "  store ";
+        if (type_) {
+            type_->Print(os);
+        }
+        os << " ";
+        if (val) {
+            if (ConstantInt* c = dynamic_cast<ConstantInt*>(val)) {
+                os << c->GetValue();
+            } else {
+                val->PrintAsOperand(os);
+            }
+        }
+        os << ", ptr ";
+        if (ptr) {
+            ptr->PrintAsOperand(os);
+        }
+        os << ", align 4";
     }
 
     // -----------------------------------------------------------------------------
@@ -92,6 +169,37 @@ namespace ir {
 
     Value* BinaryInst::GetRhs() const {
         return GetOperand(1);
+    }
+
+    void BinaryInst::Print(std::ostream& os) const {
+        Value* lhs = GetLhs();
+        Value* rhs = GetRhs();
+        const char* mnemonic = OpTypeToMnemonic(op_);
+        os << "  %" << GetName() << " = " << mnemonic;
+        if (OpTypeHasNsw(op_)) {
+            os << " nsw ";
+        } else {
+            os << " ";
+        }
+        if (type_) {
+            type_->Print(os);
+        }
+        os << " ";
+        if (lhs) {
+            if (ConstantInt* c = dynamic_cast<ConstantInt*>(lhs)) {
+                os << c->GetValue();
+            } else {
+                lhs->PrintAsOperand(os);
+            }
+        }
+        os << ", ";
+        if (rhs) {
+            if (ConstantInt* c = dynamic_cast<ConstantInt*>(rhs)) {
+                os << c->GetValue();
+            } else {
+                rhs->PrintAsOperand(os);
+            }
+        }
     }
 
     // -----------------------------------------------------------------------------
@@ -133,6 +241,29 @@ namespace ir {
         return is_conditional_ ? static_cast<BasicBlock*>(GetOperand(2)) : nullptr;
     }
 
+    void BranchInst::Print(std::ostream& os) const {
+        os << "  br ";
+        if (is_conditional_) {
+            os << "i1 ";
+            if (Value* cond = GetCond()) {
+                cond->PrintAsOperand(os);
+            }
+            os << ", ";
+            if (BasicBlock* t = GetIfTrue()) {
+                os << "label %" << t->GetName();
+            }
+            os << ", ";
+            if (BasicBlock* f = GetIfFalse()) {
+                os << "label %" << f->GetName();
+            }
+        } else {
+            os << "label ";
+            if (BasicBlock* dest = GetDest()) {
+                os << "%" << dest->GetName();
+            }
+        }
+    }
+
     // -----------------------------------------------------------------------------
     // CallInst
     // -----------------------------------------------------------------------------
@@ -160,6 +291,43 @@ namespace ir {
         return GetNumOperands() > 0 ? static_cast<size_t>(GetNumOperands()) - 1 : 0;
     }
 
+    void CallInst::Print(std::ostream& os) const {
+        Type* ty = GetType();
+        bool is_void = ty && ty->GetTypeId() == TypeID::VOID_TY_ID;
+        if (!is_void) {
+            os << "  %" << GetName() << " = ";
+        } else {
+            os << "  ";
+        }
+        os << "call ";
+        if (ty) {
+            ty->Print(os);
+        }
+        os << " ";
+        if (Value* callee = GetCallee()) {
+            callee->PrintAsOperand(os);
+        }
+        os << "(";
+        for (size_t i = 0; i < GetNumArgs(); ++i) {
+            if (i != 0) {
+                os << ", ";
+            }
+            Value* arg = GetArg(static_cast<int>(i));
+            if (arg) {
+                if (arg->GetType()) {
+                    arg->GetType()->Print(os);
+                }
+                os << " ";
+                if (ConstantInt* c = dynamic_cast<ConstantInt*>(arg)) {
+                    os << c->GetValue();
+                } else {
+                    arg->PrintAsOperand(os);
+                }
+            }
+        }
+        os << ")";
+    }
+
     // -----------------------------------------------------------------------------
     // ReturnInst
     // -----------------------------------------------------------------------------
@@ -177,6 +345,22 @@ namespace ir {
 
     Value* ReturnInst::GetRetVal() const {
         return GetNumOperands() > 0 ? GetOperand(0) : nullptr;
+    }
+
+    void ReturnInst::Print(std::ostream& os) const {
+        os << "  ret ";
+        Value* ret_val = GetRetVal();
+        if (ret_val && ret_val->GetType()) {
+            ret_val->GetType()->Print(os);
+            os << " ";
+            if (ConstantInt* c = dynamic_cast<ConstantInt*>(ret_val)) {
+                os << c->GetValue();
+            } else {
+                ret_val->PrintAsOperand(os);
+            }
+        } else {
+            os << "void";
+        }
     }
 
     // -----------------------------------------------------------------------------
@@ -210,6 +394,42 @@ namespace ir {
         return GetNumOperands() > 1u + idx ? GetOperand(1 + i) : nullptr;
     }
 
+    void GetElementPtrInst::Print(std::ostream& os) const {
+        Value* base = GetPointerOperand();
+        if (!base || !base->GetType()) {
+            return;
+        }
+        Type* base_ty = base->GetType();
+        PointerType* ptr_ty = base_ty ? dynamic_cast<PointerType*>(base_ty) : nullptr;
+        Type* pointee = ptr_ty ? ptr_ty->GetPointeeType() : nullptr;
+        os << "  %" << GetName() << " = getelementptr inbounds ";
+        if (pointee) {
+            pointee->Print(os);
+        } else {
+            os << "i32";
+        }
+        os << ", ptr ";
+        base->PrintAsOperand(os);
+        Value* idx0 = GetIndex(0);
+        Value* idx1 = GetIndex(1);
+        if (idx0) {
+            os << ", i32 ";
+            if (ConstantInt* c = dynamic_cast<ConstantInt*>(idx0)) {
+                os << c->GetValue();
+            } else {
+                idx0->PrintAsOperand(os);
+            }
+        }
+        if (idx1) {
+            os << ", i32 ";
+            if (ConstantInt* c = dynamic_cast<ConstantInt*>(idx1)) {
+                os << c->GetValue();
+            } else {
+                idx1->PrintAsOperand(os);
+            }
+        }
+    }
+
     // -----------------------------------------------------------------------------
     // IcmpInst
     // -----------------------------------------------------------------------------
@@ -236,6 +456,29 @@ namespace ir {
         return GetOperand(1);
     }
 
+    void IcmpInst::Print(std::ostream& os) const {
+        Value* lhs = GetLhs();
+        Value* rhs = GetRhs();
+        os << "  %" << GetName() << " = icmp " << IcmpPredToMnemonic(pred_) << " ";
+        if (lhs && lhs->GetType()) {
+            lhs->GetType()->Print(os);
+            os << " ";
+            if (ConstantInt* c = dynamic_cast<ConstantInt*>(lhs)) {
+                os << c->GetValue();
+            } else {
+                lhs->PrintAsOperand(os);
+            }
+        }
+        os << ", ";
+        if (rhs) {
+            if (ConstantInt* c = dynamic_cast<ConstantInt*>(rhs)) {
+                os << c->GetValue();
+            } else {
+                rhs->PrintAsOperand(os);
+            }
+        }
+    }
+
     // -----------------------------------------------------------------------------
     // ZextInst
     // -----------------------------------------------------------------------------
@@ -249,6 +492,30 @@ namespace ir {
 
     Value* ZextInst::GetOperandValue() const {
         return GetOperand(0);
+    }
+
+    void ZextInst::Print(std::ostream& os) const {
+        Value* op = GetOperandValue();
+        os << "  %" << GetName() << " = zext ";
+        if (op && op->GetType()) {
+            op->GetType()->Print(os);
+        } else {
+            os << "i1";
+        }
+        os << " ";
+        if (op) {
+            if (ConstantInt* c = dynamic_cast<ConstantInt*>(op)) {
+                os << c->GetValue();
+            } else {
+                op->PrintAsOperand(os);
+            }
+        }
+        os << " to ";
+        if (type_) {
+            type_->Print(os);
+        } else {
+            os << "i32";
+        }
     }
 
     // -----------------------------------------------------------------------------
@@ -265,6 +532,30 @@ namespace ir {
 
     Value* TruncInst::GetOperandValue() const {
         return GetOperand(0);
+    }
+
+    void TruncInst::Print(std::ostream& os) const {
+        Value* op = GetOperandValue();
+        os << "  %" << GetName() << " = trunc ";
+        if (op && op->GetType()) {
+            op->GetType()->Print(os);
+        } else {
+            os << "i32";
+        }
+        os << " ";
+        if (op) {
+            if (ConstantInt* c = dynamic_cast<ConstantInt*>(op)) {
+                os << c->GetValue();
+            } else {
+                op->PrintAsOperand(os);
+            }
+        }
+        os << " to ";
+        if (type_) {
+            type_->Print(os);
+        } else {
+            os << "i8";
+        }
     }
 
 } // namespace ir

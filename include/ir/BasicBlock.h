@@ -5,14 +5,13 @@
  * BasicBlock is a Value (has a label/name and type LabelType). It owns
  * its instructions via unique_ptr list for efficient insertion/removal.
  */
-
-#ifndef IR_BASICBLOCK_H
-#define IR_BASICBLOCK_H
+#pragma once
 
 #include "ir/Instruction.h"
 #include "ir/Value.h"
 #include <list>
 #include <memory>
+#include <ostream>
 
 namespace ir {
 
@@ -36,10 +35,11 @@ namespace ir {
         /** @brief Append instruction to this block; sets inst's parent to this. */
         void AddInstruction(std::unique_ptr<Instruction> inst);
 
+        void PrintAsOperand(std::ostream& os) const override;
+        void Print(std::ostream& os) const;
+
     private:
         std::list<std::unique_ptr<Instruction>> instructions_;
     };
 
 } // namespace ir
-
-#endif // IR_BASICBLOCK_H

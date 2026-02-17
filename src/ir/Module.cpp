@@ -49,6 +49,20 @@ namespace ir {
         return integer_types_[2].get();
     }
 
+    VoidType* Module::GetVoidType() {
+        if (!void_type_) {
+            void_type_ = std::make_unique<VoidType>();
+        }
+        return void_type_.get();
+    }
+
+    LabelType* Module::GetLabelType() {
+        if (!label_type_) {
+            label_type_ = std::make_unique<LabelType>();
+        }
+        return label_type_.get();
+    }
+
     ArrayType* Module::GetArrayType(Type* element_type, unsigned num_elements) {
         if (!element_type) {
             return nullptr;
@@ -144,7 +158,7 @@ namespace ir {
         function_types_.push_back(std::make_unique<FunctionType>(return_type, param_types));
         auto func = std::make_unique<Function>(name, function_types_.back().get());
         for (size_t i = 0; i < param_types.size(); ++i) {
-            func->AddArgument(std::make_unique<Argument>("", param_types[i]));
+            func->AddArgument(std::make_unique<Argument>(std::to_string(i), param_types[i]));
         }
         Function* ptr = func.get();
         functions_.push_back(std::move(func));
@@ -158,5 +172,18 @@ namespace ir {
         g->SetInitializer(init);
         g->SetConstant(is_constant);
         return g;
+    }
+
+    void Module::Print(std::ostream& os) const {
+        for (const auto& g : global_vars_) {
+            if (g) {
+                g->Print(os);
+            }
+        }
+        for (const auto& f : functions_) {
+            if (f) {
+                f->Print(os);
+            }
+        }
     }
 } // namespace ir

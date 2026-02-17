@@ -7,9 +7,7 @@
  * in the classic LLVM sense—here we follow the spec and have Instruction
  * inherit User.
  */
-
-#ifndef IR_USER_H
-#define IR_USER_H
+#pragma once
 
 #include "ir/Use.h"
 #include "ir/Value.h"
@@ -72,5 +70,3 @@ namespace ir {
     };
 
 } // namespace ir
-
-#endif // IR_USER_H

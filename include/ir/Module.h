@@ -5,9 +5,7 @@
  * The Module owns all GlobalVars and Functions. It is the root of the
  * IR ownership tree.
  */
-
-#ifndef IR_MODULE_H
-#define IR_MODULE_H
+#pragma once
 
 #include "ir/Constant.h"
 #include "ir/Function.h"
@@ -18,6 +16,7 @@
 
 #include <memory>
 #include <optional>
+#include <ostream>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -53,6 +52,8 @@ namespace ir {
         IntegerType* GetI32Type();
         IntegerType* GetI8Type();
         IntegerType* GetI1Type();
+        VoidType* GetVoidType();
+        LabelType* GetLabelType();
 
         /**
          * @brief Get the pointer type for the given pointee type.
@@ -110,6 +111,9 @@ namespace ir {
          */
         ~Module();
 
+        /** @brief Print entire module to LLVM IR (globals, declares, defines). */
+        void Print(std::ostream& os) const;
+
     private:
         /** Ensure the given lib I/O function is declared (idempotent). Only declares if \p name
          * is one of the course-defined lib functions and not yet in functions_. */
@@ -139,8 +143,8 @@ namespace ir {
         std::unordered_map<int64_t, ConstantInt*> const_i8_cache_;
         std::vector<std::unique_ptr<ArrayType>> array_types_;
         std::vector<std::unique_ptr<Constant>> other_constants_;
+        std::unique_ptr<VoidType> void_type_;
+        std::unique_ptr<LabelType> label_type_;
     };
 
 } // namespace ir
-
-#endif // IR_MODULE_H

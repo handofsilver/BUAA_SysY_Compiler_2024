@@ -6,12 +6,11 @@
  * addresses, function addresses). GlobalVar and Function inherit from
  * Constant because their addresses are constants.
  */
-
-#ifndef IR_CONSTANT_H
-#define IR_CONSTANT_H
+#pragma once
 
 #include "ir/User.h"
 
+#include <ostream>
 #include <vector>
 
 namespace ir {
@@ -44,6 +43,8 @@ namespace ir {
             return value_;
         }
 
+        void PrintAsOperand(std::ostream& os) const override;
+
     private:
         int64_t value_;
     };
@@ -68,5 +69,3 @@ namespace ir {
         std::vector<Constant*> elements_;
     };
 } // namespace ir
-
-#endif // IR_CONSTANT_H

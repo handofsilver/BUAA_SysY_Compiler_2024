@@ -6,11 +6,10 @@
  * for the entire program. They are Constants because that address is
  * constant.
  */
-
-#ifndef IR_GLOBALVAR_H
-#define IR_GLOBALVAR_H
+#pragma once
 
 #include "ir/Constant.h"
+#include <ostream>
 
 namespace ir {
 
@@ -39,11 +38,14 @@ namespace ir {
             is_constant_ = c;
         }
 
+        void PrintAsOperand(std::ostream& os) const override;
+
+        /** @brief Print global/constant definition (e.g. @a = dso_local global i32 0, align 4). */
+        void Print(std::ostream& os) const;
+
     private:
         Constant* init_ = nullptr;
         bool is_constant_ = false;
     };
 
 } // namespace ir
-
-#endif // IR_GLOBALVAR_H
