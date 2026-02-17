@@ -10,6 +10,7 @@
 #include "IRScopeGuard.h"
 #include "ir/Constant.h"
 #include "ir/Instruction.h"
+#include "ir/Type.h"
 #include <optional>
 namespace {
 
@@ -138,6 +139,103 @@ bool IRGenVisitor::IsBlockTerminated() const {
             dynamic_cast<ir::ReturnInst*>(last) != nullptr);
 }
 
+ir::Value* IRGenVisitor::CoerceToI1(ir::Value* cond_val) {
+    if (!cond_val || !builder_->GetInsertBlock()) {
+        return nullptr;
+    }
+    if (cond_val->GetType() && cond_val->GetType() == module_->GetI1Type()) {
+        return cond_val;
+    }
+    cond_val = PromoteToI32(cond_val);
+    ir::Instruction* cmp = builder_->CreateIcmp(module_->GetI1Type(), ir::IcmpPred::NE, cond_val,
+                                                module_->GetInt32Constant(0));
+    return cmp ? cmp : cond_val;
+}
+
+void IRGenVisitor::EmitShortCircuitAND(Exp* lhs, Exp* rhs) {
+    ir::Instruction* result_slot = CreateEntryBlockAlloca(module_->GetI32Type(), "");
+    if (!result_slot || !builder_->GetInsertBlock()) {
+        return;
+    }
+    ir::BasicBlock* true_block = CreateBasicBlock("and.then");
+    ir::BasicBlock* false_block = CreateBasicBlock("and.false");
+    ir::BasicBlock* merge_block = CreateBasicBlock("and.merge");
+    if (!true_block || !false_block || !merge_block) {
+        return;
+    }
+
+    lhs->Accept(*this);
+    ir::Value* cond_val = temp_value_;
+    if (!cond_val) {
+        return;
+    }
+    ir::Value* cond_i1 = CoerceToI1(cond_val);
+    if (!cond_i1) {
+        return;
+    }
+    builder_->CreateCondBr(cond_i1, true_block, false_block);
+
+    builder_->SetInsertPoint(false_block);
+    builder_->CreateStore(module_->GetInt32Constant(0), result_slot);
+    builder_->CreateBr(merge_block);
+
+    builder_->SetInsertPoint(true_block);
+    rhs->Accept(*this);
+    ir::Value* rhs_val = PromoteToI32(temp_value_);
+    if (!IsBlockTerminated()) {
+        if (rhs_val) {
+            builder_->CreateStore(rhs_val, result_slot);
+        }
+        builder_->CreateBr(merge_block);
+    }
+
+    builder_->SetInsertPoint(merge_block);
+    ir::Instruction* load = builder_->CreateLoad(result_slot);
+    temp_value_ = load ? load : result_slot;
+}
+
+void IRGenVisitor::EmitShortCircuitOR(Exp* lhs, Exp* rhs) {
+    ir::Instruction* result_slot = CreateEntryBlockAlloca(module_->GetI32Type(), "");
+    if (!result_slot || !builder_->GetInsertBlock()) {
+        return;
+    }
+    ir::BasicBlock* true_block = CreateBasicBlock("or.then");
+    ir::BasicBlock* rhs_block = CreateBasicBlock("or.rhs");
+    ir::BasicBlock* merge_block = CreateBasicBlock("or.merge");
+    if (!true_block || !rhs_block || !merge_block) {
+        return;
+    }
+
+    lhs->Accept(*this);
+    ir::Value* cond_val = temp_value_;
+    if (!cond_val) {
+        return;
+    }
+    ir::Value* cond_i1 = CoerceToI1(cond_val);
+    if (!cond_i1) {
+        return;
+    }
+    builder_->CreateCondBr(cond_i1, true_block, rhs_block);
+
+    builder_->SetInsertPoint(true_block);
+    builder_->CreateStore(module_->GetInt32Constant(1), result_slot);
+    builder_->CreateBr(merge_block);
+
+    builder_->SetInsertPoint(rhs_block);
+    rhs->Accept(*this);
+    ir::Value* rhs_val = PromoteToI32(temp_value_);
+    if (!IsBlockTerminated()) {
+        if (rhs_val) {
+            builder_->CreateStore(rhs_val, result_slot);
+        }
+        builder_->CreateBr(merge_block);
+    }
+
+    builder_->SetInsertPoint(merge_block);
+    ir::Instruction* load = builder_->CreateLoad(result_slot);
+    temp_value_ = load ? load : result_slot;
+}
+
 ir::Instruction* IRGenVisitor::CreateEntryBlockAlloca(ir::Type* type, const std::string& name) {
     if (!current_function_ || !type) {
         return nullptr;
@@ -167,6 +265,9 @@ int IRGenVisitor::GetConstIntVal(Exp* exp) {
     if (auto* num = dynamic_cast<Number*>(exp)) {
         return num->int_const;
     }
+    if (auto* ch = dynamic_cast<Character*>(exp)) {
+        return static_cast<int>(ch->char_const);
+    }
     if (auto* cexp = dynamic_cast<ConstExp*>(exp)) {
         return GetConstIntVal(cexp->inner.get());
     }
@@ -193,6 +294,56 @@ int IRGenVisitor::GetConstIntVal(Exp* exp) {
         }
     }
     return 0;
+}
+
+// -----------------------------------------------------------------------------
+// Implicit type conversion (SysY int/char)
+// -----------------------------------------------------------------------------
+
+ir::Type* IRGenVisitor::GetPointeeType(ir::Value* ptr) const {
+    if (!ptr || !ptr->GetType()) {
+        return nullptr;
+    }
+    auto* pt = dynamic_cast<ir::PointerType*>(ptr->GetType());
+    return pt ? pt->GetPointeeType() : nullptr;
+}
+
+ir::Value* IRGenVisitor::PromoteToI32(ir::Value* v) {
+    if (!v || !builder_->GetInsertBlock()) {
+        return v;
+    }
+    ir::Type* ty = v->GetType();
+    auto* int_ty = dynamic_cast<ir::IntegerType*>(ty);
+    if (!int_ty || int_ty->GetBits() != 8) {
+        return v;
+    }
+    ir::Instruction* z = builder_->CreateZext(v, module_->GetI32Type());
+    return z ? z : v;
+}
+
+ir::Value* IRGenVisitor::ConvertToTargetType(ir::Value* v, ir::Type* target_ty) {
+    if (!v || !target_ty || !builder_->GetInsertBlock()) {
+        return v;
+    }
+    auto* target_int = dynamic_cast<ir::IntegerType*>(target_ty);
+    auto* val_int = dynamic_cast<ir::IntegerType*>(v->GetType());
+    if (!target_int || !val_int) {
+        return v;
+    }
+    unsigned target_bits = target_int->GetBits();
+    unsigned val_bits = val_int->GetBits();
+    if (target_bits == val_bits) {
+        return v;
+    }
+    if (target_bits == 8 && val_bits == 32) {
+        ir::Instruction* t = builder_->CreateTrunc(v, module_->GetI8Type());
+        return t ? t : v;
+    }
+    if (target_bits == 32 && val_bits == 8) {
+        ir::Instruction* z = builder_->CreateZext(v, module_->GetI32Type());
+        return z ? z : v;
+    }
+    return v;
 }
 
 // -----------------------------------------------------------------------------
@@ -571,6 +722,10 @@ void IRGenVisitor::VisitAssignStmt(AssignStmt& assign_stmt) {
     assign_stmt.exp->Accept(*this);
     ir::Value* val = temp_value_;
     if (addr && val && builder_->GetInsertBlock()) {
+        ir::Type* target_ty = GetPointeeType(addr);
+        if (target_ty) {
+            val = ConvertToTargetType(val, target_ty);
+        }
         builder_->CreateStore(val, addr);
     }
 }
@@ -589,17 +744,9 @@ void IRGenVisitor::VisitIfStmt(IfStmt& if_stmt) {
                                       next_block;
 
     if_stmt.cond->Accept(*this);
-    ir::Value* cond_val = temp_value_;
-    if (!cond_val || !builder_->GetInsertBlock()) {
+    ir::Value* cond_i1 = CoerceToI1(temp_value_);
+    if (!cond_i1 || !builder_->GetInsertBlock()) {
         return;
-    }
-    ir::Value* cond_i1 = cond_val;
-    if (cond_val->GetType() && cond_val->GetType() != module_->GetI1Type()) {
-        ir::Instruction* cmp = builder_->CreateIcmp(module_->GetI1Type(), ir::IcmpPred::NE,
-                                                    cond_val, module_->GetInt32Constant(0));
-        if (cmp) {
-            cond_i1 = cmp;
-        }
     }
     builder_->CreateCondBr(cond_i1, true_block, false_block);
 
@@ -641,14 +788,7 @@ void IRGenVisitor::VisitForStmt(ForStmt& for_stmt) {
         (*for_stmt.cond)->Accept(*this);
         ir::Value* cond_val = temp_value_;
         if (cond_val && builder_->GetInsertBlock()) {
-            ir::Value* cond_i1 = cond_val;
-            if (cond_val->GetType() && cond_val->GetType() != module_->GetI1Type()) {
-                ir::Instruction* cmp = builder_->CreateIcmp(module_->GetI1Type(), ir::IcmpPred::NE,
-                                                            cond_val, module_->GetInt32Constant(0));
-                if (cmp) {
-                    cond_i1 = cmp;
-                }
-            }
+            ir::Value* cond_i1 = CoerceToI1(cond_val);
             builder_->CreateCondBr(cond_i1, body_block, after_block);
         } else {
             builder_->CreateBr(body_block);
@@ -689,6 +829,10 @@ void IRGenVisitor::VisitForInitOrStep(ForInitOrStep& for_init_or_step) {
     }
     ir::Value* val = temp_value_;
     if (addr && val && builder_->GetInsertBlock()) {
+        ir::Type* target_ty = GetPointeeType(addr);
+        if (target_ty) {
+            val = ConvertToTargetType(val, target_ty);
+        }
         builder_->CreateStore(val, addr);
     }
 }
@@ -709,7 +853,14 @@ void IRGenVisitor::VisitReturnStmt(ReturnStmt& return_stmt) {
     if (return_stmt.exp.has_value() && *return_stmt.exp) {
         (*return_stmt.exp)->Accept(*this);
         ir::Value* val = temp_value_;
-        if (val && builder_->GetInsertBlock()) {
+        if (val && builder_->GetInsertBlock() && current_function_) {
+            ir::Type* ft = current_function_->GetType();
+            if (auto* fty = dynamic_cast<ir::FunctionType*>(ft)) {
+                ir::Type* ret_ty = fty->GetReturnType();
+                if (ret_ty && ret_ty != ir::GetVoidType()) {
+                    val = ConvertToTargetType(val, ret_ty);
+                }
+            }
             builder_->CreateRet(val);
         }
     } else {
@@ -725,7 +876,9 @@ void IRGenVisitor::VisitGetintStmt(GetintStmt& getint_stmt) {
     ir::Instruction* call =
         builder_->CreateCall(module_->GetI32Type(), module_->GetFunction("getint"), {});
     if (addr && call && builder_->GetInsertBlock()) {
-        builder_->CreateStore(call, addr);
+        ir::Type* target_ty = GetPointeeType(addr);
+        ir::Value* to_store = target_ty ? ConvertToTargetType(call, target_ty) : call;
+        builder_->CreateStore(to_store, addr);
     }
 }
 
@@ -737,7 +890,9 @@ void IRGenVisitor::VisitGetcharStmt(GetcharStmt& getchar_stmt) {
     ir::Instruction* call =
         builder_->CreateCall(module_->GetI32Type(), module_->GetFunction("getchar"), {});
     if (addr && call && builder_->GetInsertBlock()) {
-        builder_->CreateStore(call, addr);
+        ir::Type* target_ty = GetPointeeType(addr);
+        ir::Value* to_store = target_ty ? ConvertToTargetType(call, target_ty) : call;
+        builder_->CreateStore(to_store, addr);
     }
 }
 
@@ -769,7 +924,7 @@ void IRGenVisitor::VisitPrintfStmt(PrintfStmt& printf_stmt) {
             if (fmt[i + 1] == 'd') {
                 if (exp_idx < printf_stmt.exp_list.size()) {
                     printf_stmt.exp_list[exp_idx]->Accept(*this);
-                    ir::Value* val = temp_value_;
+                    ir::Value* val = PromoteToI32(temp_value_);
                     if (val) {
                         ir::Function* putint_fn = module_->GetFunction("putint");
                         if (putint_fn) {
@@ -780,10 +935,10 @@ void IRGenVisitor::VisitPrintfStmt(PrintfStmt& printf_stmt) {
                 }
                 ++i; // skip the 'd'
             } else if (fmt[i + 1] == 'c') {
-                // Handle %c: evaluate next exp, call putch(val).
+                // Handle %c: evaluate next exp, call putch(val). putch takes i32.
                 if (exp_idx < printf_stmt.exp_list.size()) {
                     printf_stmt.exp_list[exp_idx]->Accept(*this);
-                    ir::Value* val = temp_value_;
+                    ir::Value* val = PromoteToI32(temp_value_);
                     if (val) {
                         ir::Function* putch_fn = module_->GetFunction("putch");
                         if (putch_fn) {
@@ -794,6 +949,7 @@ void IRGenVisitor::VisitPrintfStmt(PrintfStmt& printf_stmt) {
                 }
                 ++i; // skip the 'c'
             } else if (fmt[i + 1] == '%') {
+                literal.push_back('%');
                 ++i;
             }
         } else {
@@ -830,8 +986,14 @@ void IRGenVisitor::VisitLVal(LVal& lval) {
         if (is_lval_mode_) {
             temp_value_ = value; // caller will store to this address
         } else {
-            ir::Instruction* load = builder_->CreateLoad(value);
-            temp_value_ = load ? load : value;
+            ir::Type* pointee = GetPointeeType(value);
+            if (pointee && dynamic_cast<ir::ArrayType*>(pointee)) {
+                // Array as value (e.g. function arg): pass address, do not load.
+                temp_value_ = value;
+            } else {
+                ir::Instruction* load = builder_->CreateLoad(value);
+                temp_value_ = load ? load : value;
+            }
         }
         return;
     }
@@ -880,6 +1042,17 @@ void IRGenVisitor::VisitCharacter(Character& character) {
 }
 
 void IRGenVisitor::VisitBinaryExp(BinaryExp& binary_exp) {
+    OpType op = binary_exp.op;
+
+    if (op == OpType::AND) {
+        EmitShortCircuitAND(binary_exp.lhs.get(), binary_exp.rhs.get());
+        return;
+    }
+    if (op == OpType::OR) {
+        EmitShortCircuitOR(binary_exp.lhs.get(), binary_exp.rhs.get());
+        return;
+    }
+
     binary_exp.lhs->Accept(*this);
     ir::Value* lhs = temp_value_;
     binary_exp.rhs->Accept(*this);
@@ -887,14 +1060,17 @@ void IRGenVisitor::VisitBinaryExp(BinaryExp& binary_exp) {
     if (!lhs || !rhs || !builder_->GetInsertBlock()) {
         return;
     }
-    OpType op = binary_exp.op;
     if (IsArithmeticOp(op)) {
+        lhs = PromoteToI32(lhs);
+        rhs = PromoteToI32(rhs);
         ir::Instruction* inst = builder_->CreateBinary(op, lhs, rhs);
         temp_value_ = inst ? inst : temp_value_;
         return;
     }
     std::optional<ir::IcmpPred> pred = OpTypeToIcmpPred(op);
     if (pred) {
+        lhs = PromoteToI32(lhs);
+        rhs = PromoteToI32(rhs);
         ir::Instruction* cmp = builder_->CreateIcmp(module_->GetI1Type(), *pred, lhs, rhs);
         if (cmp) {
             ir::Instruction* zext = builder_->CreateZext(cmp, module_->GetI32Type());
@@ -902,7 +1078,6 @@ void IRGenVisitor::VisitBinaryExp(BinaryExp& binary_exp) {
         }
         return;
     }
-    // AND / OR (short-circuit) require control flow; extend when implementing Cond.
 }
 
 void IRGenVisitor::VisitUnaryExp(UnaryExp& unary_exp) {
@@ -917,11 +1092,13 @@ void IRGenVisitor::VisitUnaryExp(UnaryExp& unary_exp) {
     ir::ConstantInt* zero = module_->GetInt32Constant(0);
 
     if (op == OpType::MINU) {
-        ir::Instruction* inst = builder_->CreateBinary(OpType::SUB, zero, temp_value_);
+        operand = PromoteToI32(operand);
+        ir::Instruction* inst = builder_->CreateBinary(OpType::SUB, zero, operand);
         temp_value_ = inst ? inst : temp_value_;
         return;
     }
     if (op == OpType::NOT) {
+        operand = PromoteToI32(operand);
         ir::Instruction* cmp =
             builder_->CreateIcmp(module_->GetI1Type(), ir::IcmpPred::EQ, operand, zero);
         if (cmp) {
@@ -942,12 +1119,22 @@ void IRGenVisitor::VisitFuncCall(FuncCall& func_call) {
         func_call.func_r_params->Accept(*this);
     }
     ir::Type* ret_type = nullptr;
+    std::vector<ir::Type*> param_types;
     if (ir::Type* ft = callee->GetType()) {
         if (auto* fty = dynamic_cast<ir::FunctionType*>(ft)) {
             ret_type = fty->GetReturnType();
+            param_types = fty->GetParamTypes();
         }
     }
-    ir::Instruction* call = builder_->CreateCall(ret_type, callee, call_args_);
+    std::vector<ir::Value*> converted_args;
+    for (size_t i = 0; i < call_args_.size(); ++i) {
+        ir::Value* arg = call_args_[i];
+        if (i < param_types.size() && arg) {
+            arg = ConvertToTargetType(arg, param_types[i]);
+        }
+        converted_args.push_back(arg);
+    }
+    ir::Instruction* call = builder_->CreateCall(ret_type, callee, converted_args);
     if (call && ret_type && ret_type != ir::GetVoidType()) {
         temp_value_ = call;
     }

@@ -17,6 +17,8 @@
 #include <string>
 #include <vector>
 
+class Exp;
+
 class IRGenVisitor : public ASTVisitor {
 public:
     IRGenVisitor();
@@ -142,6 +144,24 @@ private:
     bool IsBlockTerminated() const;
 
     /**
+     * @brief Coerce a condition value to i1 (for br). If already i1, return as-is; else icmp ne
+     * val, 0.
+     */
+    ir::Value* CoerceToI1(ir::Value* cond_val);
+
+    /**
+     * @brief Emit short-circuit AND: lhs then (if true) rhs; result 0 when lhs is false, else rhs.
+     * Sets temp_value_ to the merged result (i32) at the merge block.
+     */
+    void EmitShortCircuitAND(Exp* lhs, Exp* rhs);
+
+    /**
+     * @brief Emit short-circuit OR: lhs then (if false) rhs; result 1 when lhs is true, else rhs.
+     * Sets temp_value_ to the merged result (i32) at the merge block.
+     */
+    void EmitShortCircuitOR(Exp* lhs, Exp* rhs);
+
+    /**
      * @brief Create an alloca in the current function's entry block (at the front), then restore
      * the previous insert point. Used for local variables and parameter copies.
      * @param type Allocated type (e.g. i32); the instruction's result type will be pointer to it.
@@ -156,6 +176,25 @@ private:
      * Unsupported cases (e.g. LVal, function call) return 0.
      */
     int GetConstIntVal(Exp* exp);
+
+    // -------------------------------------------------------------------------
+    // Implicit type conversion (SysY int/char; see docs/ai_collab_notes/type_conversion.md)
+    // -------------------------------------------------------------------------
+
+    /** @brief Get pointee type of a pointer Value*, or nullptr if not a pointer. */
+    ir::Type* GetPointeeType(ir::Value* ptr) const;
+
+    /**
+     * @brief Promote value to i32 for arithmetic/condition. If already i32/i1, return as-is; if i8,
+     * insert zext i8 to i32. Other types return as-is.
+     */
+    ir::Value* PromoteToI32(ir::Value* v);
+
+    /**
+     * @brief Convert value to target scalar type (i8 or i32). Insert trunc i32->i8 or zext i8->i32
+     * as needed; if types already match, return v. Non-scalar or null returns v unchanged.
+     */
+    ir::Value* ConvertToTargetType(ir::Value* v, ir::Type* target_ty);
 
     // -------------------------------------------------------------------------
     // Helpers for variable/constant definition (modularize VisitConstDef/VisitVarDef)
