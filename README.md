@@ -8,7 +8,7 @@
 
 > 北航计算机学院编译原理课程实验 - SysY 语言编译器（C++17 重构版）
 
-本仓库记录了该编译器从 Java 版本迁移至 C++ 版本的重构过程。项目按实验阶段管理分支，当前处于 **`parser`** 分支，已完成词法分析与语法分析阶段。
+本仓库记录了该编译器从 Java 版本迁移至 C++ 版本的重构过程。项目按实验阶段管理分支，当前已完成**词法分析**、**语法分析**与**语义分析**阶段；主控读取 `testfile.txt`，经 Lexer → Parser → SemanticAnalyzer 后输出 `symbol.txt`（无错误）或 `error.txt`（有错误）。
 
 ------
 
@@ -31,7 +31,7 @@
    原 Java 版本因彼时时间仓促，代码生成仅止步于 LLVM IR，且存在大量因赶工导致的架构耦合。本次重构旨在彻底完成 **MIPS 汇编生成**及**后端优化**，并重构不合理的模块交互逻辑，打造一个架构清晰的完整编译器。
 
 2. **Modern C++ 深度实践**
-   
+
    本项目将作为 C++ 技能树的实战演练场。重点聚焦于面向对象设计 (Object-Oriented Programming, OOP) 的优雅实现，以及智能指针 (Smart Pointers)、STL 高级特性与右值引用的实际应用，确保代码风格符合现代工程标准。
 
 3. **工程能力复健**
@@ -44,13 +44,13 @@
 
 本 README 结构将随开发进度动态更新。
 
-| **阶段**        | **分支**   | **状态** | **说明**                                           |
-| --------------- | ---------- | -------- | -------------------------------------------------- |
-| **词法分析**    | `lexer`    | ✅ 已完成 | 实现了基本的 Token 识别与错误处理。                |
-| **语法分析**    | `parser`   | ✅ 已完成 | 当前分支。递归下降 + AST，输出语法成分与错误码。   |
-| **语义/符号表** | `semantic` | ⏳ 待开发 | 作用域管理与类型检查。                             |
-| **中间代码**    | `ir`       | ⏳ 待开发 | LLVM IR 生成。                                     |
-| **目标代码**    | `backend`  | ⏳ 待开发 | **本次重构核心目标**：MIPS 生成 + 寄存器分配优化。 |
+| **阶段**        | **分支**   | **状态** | **说明**                                                                 |
+| --------------- | ---------- | -------- | ------------------------------------------------------------------------ |
+| **词法分析**    | `lexer`    | ✅ 已完成 | Token 识别与错误处理，输出 `output.txt` / `error.txt`。                    |
+| **语法分析**    | `parser`   | ✅ 已完成 | 递归下降 + AST，输出 `parser.txt` / `error.txt`。                         |
+| **语义/符号表** | `analyzer` | ✅ 已完成 | 符号表、作用域（RAII）、Visitor 遍历；输出 `symbol.txt` / `error.txt`。   |
+| **中间代码**    | `ir`       | ⏳ 待开发 | LLVM IR 生成。                                                           |
+| **目标代码**    | `backend`  | ⏳ 待开发 | **本次重构核心目标**：MIPS 生成 + 寄存器分配优化。                         |
 
 ------
 
@@ -90,49 +90,70 @@
 - **与 Lexer 的交互**：拉取式 (Pull Model)，Parser 通过 `Advance()` 驱动 Lexer 消费 Token；Lexer 提供 `PeekNext()` / `PeekNext2()` 支持 1/2-token 超前查看。
 - **AST 设计**：解析与存储分离；表达式统一为 **Exp** 体系（LVal、Number、BinaryExp、UnaryExp、FuncCall 等），二元运算用 **BinaryExp(lhs, rhs, op)** 左结合；详见 [Parser 设计文档](docs/design_documents/parser.md)。
 
-### 2. 输入与输出规范（Parser 分支）
+### 2. 输入与输出规范（Parser 阶段）
 
-程序默认读取工作目录下的 `testfile.txt`，运行 **Lexer + Parser**，根据是否存在错误生成不同文件：
+程序读取 `testfile.txt`，运行 **Lexer + Parser**；若启用 Parser 输出则生成 `parser.txt`（正确时）或参与合并写 `error.txt`（词法 a 类、语法 i/j/k 类等）。详见 [第二次实验要求](docs/course_info/requirement_2_parser.md)。
 
-| **场景**     | **输入文件**   | **输出文件** | **输出内容格式**                                                                 |
-| ------------ | -------------- | ------------ | -------------------------------------------------------------------------------- |
-| **正确源程序** | `testfile.txt` | `parser.txt` | 按读入顺序：每行 `单词类别码 单词值` 或单独一行 `<语法成分名>`（如 `<Stmt>`）     |
-| **存在错误** | `testfile.txt` | `error.txt`  | `行号 错误类别码`（每行一项，按行号排序；合并词法 a 类与语法 i/j/k 类错误）        |
+### 3. 项目结构（含语义分析）
 
-> **注意**：
->
-> - 输出规范详见 [第二次实验要求文档](docs/course_info/requirement_2_parser.md)。
-> - 语法错误码 **i**（缺分号）、**j**（缺右小括号）、**k**（缺右中括号）等由 Parser 检测；即使有错误也会完成整轮词法+语法分析并输出全部错误。
-
-### 3. 项目结构 (Parser 分支)
+当前主流程为 **Lexer → Parser → SemanticAnalyzer**；输出以**语义分析**为准：无错误时写 `symbol.txt`，有错误时合并三阶段错误写 `error.txt`。
 
 ```Plaintext
 .
-├── CMakeLists.txt          # C++17 标准构建配置
+├── CMakeLists.txt
 ├── src/
-│   ├── main.cpp            # 程序入口：读 testfile.txt，驱动 Lexer + Parser，写 parser.txt / error.txt
-│   ├── Lexer.cpp           # 词法分析核心实现
-│   ├── parser.cpp          # 语法分析核心实现（递归下降 + AST 构造）
-│   └── TokenType.cpp       # Token 字符串转换工具
+│   ├── main.cpp            # 入口：读 testfile.txt，Lexer → Parser → SemanticAnalyzer，写 symbol.txt / error.txt
+│   ├── Lexer.cpp
+│   ├── parser.cpp          # 递归下降 + AST 构造
+│   ├── SemanticAnalyzer.cpp # 语义分析 Visitor：符号表、作用域、错误 b/c/d/e/f/g/h/l/m
+│   ├── SymbolTable.cpp    # 作用域栈、Lookup/Register
+│   ├── Symbol.cpp          # Symbol 类型与 FormatForOutput
+│   ├── ScopeGuard.cpp      # RAII 作用域守卫
+│   └── TokenType.cpp
 ├── include/
-│   ├── Lexer.h             # Lexer 类定义
-│   ├── Parser.h            # Parser 类与解析接口
-│   ├── AST.h               # 抽象语法树节点定义（CompUnit、Decl、Stmt、Exp 等）
-│   ├── Token.h             # Token 结构体与相关类型
-│   └── TokenType.h         # 单词类别码 (enum class)
+│   ├── Lexer.h
+│   ├── Parser.h
+│   ├── AST.h               # AST 节点与 Accept(Visitor)
+│   ├── ASTVisitor.h        # Visitor 接口
+│   ├── SemanticAnalyzer.h  # 语义分析 Visitor 实现
+│   ├── SymbolTable.h
+│   ├── Symbol.h
+│   ├── ScopeGuard.h
+│   ├── Token.h
+│   └── TokenType.h
 └── docs/
-    ├── course_info/        # 课程原始文档与要求
+    ├── course_info/
     │   ├── 2024_SysY_grammar.md
     │   ├── 2024_SysY_detailed.md
     │   ├── requirement_1_lexer.md
     │   ├── requirement_2_parser.md
-    │   ├── requirement_3_semantics.md
-    │   ├── requirement_4_codegen_simple.md
-    │   └── requirement_5_codegen.md
-    └── design_documents/   # 设计说明
+    │   ├── requirement_3_analyzer.md
+    │   └── ...
+    └── design_documents/
         ├── lexer.md
-        └── parser.md
+        ├── parser.md
+        └── semantic_analyzer.md   # 符号表、作用域扁平化、常量折叠、错误检测机制等
 ```
+
+------
+
+## 📋 语义分析 (Semantic Analyzer)
+
+### 1. 功能概述
+
+在 AST 上做一遍 **Visitor 遍历**，维护栈式符号表与作用域，在声明处注册符号、在引用处查找并做语义检查；同时完成常量折叠以支持 ConstExp/数组维度求值。
+
+- **作用域**：栈式符号表 + **ScopeGuard (RAII)**，进入 Block/FuncDef 时 PushScope，离开时自动 PopScope；函数形参与函数体共用一层作用域（VisitBlockContents 不二次压栈），见设计文档「函数作用域扁平化」。
+- **错误**：收集型，不抛异常；支持课程要求的 b/c/d/e/f/g/h/l/m 等语义错误码，其中 **g（缺少 return）** 按课程简化规则仅检查函数体最后一条是否为 return，详见 [2024_SysY_detailed.md](docs/course_info/2024_SysY_detailed.md) 与 [语义分析设计文档](docs/design_documents/semantic_analyzer.md)。
+
+### 2. 输入与输出规范（语义分析阶段）
+
+| **场景**     | **输入**       | **输出文件**  | **输出内容格式**                                      |
+| ------------ | -------------- | ------------- | ----------------------------------------------------- |
+| **正确源程序** | `testfile.txt` | `symbol.txt`  | `作用域序号 标识符 类型名`（如 `1 year ConstInt`）     |
+| **存在错误** | `testfile.txt` | `error.txt`   | `行号 错误类别码`（词法+语法+语义合并，按行号排序）   |
+
+- 规范详见 [第三次实验要求](docs/course_info/requirement_3_analyzer.md)。`main` 不纳入符号表；符号输出可由主控开关控制（便于后续完整编译器关闭 symbol.txt）。
 
 ------
 
@@ -156,7 +177,10 @@ cmake --build .
 
 ### 运行方式
 
-确保 `testfile.txt` 位于可执行文件同一目录（或根据 IDE 工作目录配置调整）。程序将根据是否存在词法/语法错误，生成 `parser.txt`（正确时）或 `error.txt`（有错误时）：
+将 `testfile.txt` 放在可执行文件所在目录（或配置 IDE 工作目录）。程序执行 **Lexer → Parser → SemanticAnalyzer**，根据是否存在错误生成：
+
+- **无错误**：`symbol.txt`（作用域序号、标识符、类型名）；若启用 Parser 输出则另有 `parser.txt`。
+- **有错误**：`error.txt`（行号 + 错误码，词法/语法/语义合并并按行号排序）。
 
 ```Bash
 # Linux / macOS
@@ -187,7 +211,6 @@ cmake --build .
 
 ## 📄 参考资料
 
-- [词法分析实验要求](docs/course_info/requirement_1_lexer.md)
-- [语法分析实验要求](docs/course_info/requirement_2_parser.md)
-- [SysY 文法与说明](docs/course_info/2024_SysY_grammar.md)、[SysY 详细定义](docs/course_info/2024_SysY_detailed.md)
-- [词法分析设计文档](docs/design_documents/lexer.md)、[语法分析设计文档](docs/design_documents/parser.md)
+- [词法分析实验要求](docs/course_info/requirement_1_lexer.md)、[语法分析实验要求](docs/course_info/requirement_2_parser.md)、[语义分析实验要求](docs/course_info/requirement_3_analyzer.md)
+- [SysY 文法](docs/course_info/2024_SysY_grammar.md)、[SysY 详细定义](docs/course_info/2024_SysY_detailed.md)
+- [词法分析设计文档](docs/design_documents/lexer.md)、[语法分析设计文档](docs/design_documents/parser.md)、[语义分析设计文档](docs/design_documents/semantic_analyzer.md)

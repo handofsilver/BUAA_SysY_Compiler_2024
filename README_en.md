@@ -8,7 +8,7 @@
 
 > BUAA School of Computer Science and Engineering - Compiler Principles Course Project - SysY Language Compiler (C++17 Refactored Version)
 
-This repository documents the refactoring of a SysY compiler from Java to C++. Project branches are managed according to development stages. Currently, the project is on the **`parser`** branch, with both lexical and syntax analysis stages completed.
+This repository documents the refactoring of a SysY compiler from Java to C++. Development is organized by stages. **Lexical**, **syntax**, and **semantic analysis** are complete: the driver reads `testfile.txt`, runs Lexer → Parser → SemanticAnalyzer, and writes `symbol.txt` (when there are no errors) or `error.txt` (when any stage reports errors).
 
 ------
 
@@ -46,11 +46,11 @@ This README will be dynamically updated to reflect development progress.
 
 | **Stage** | **Branch** | **Status** | **Description** |
 | :--- | :--- | :--- | :--- |
-| **Lexical Analysis** | `lexer` | ✅ Completed | Basic Token recognition and error handling. |
-| **Syntax Analysis** | `parser` | ✅ Completed | Current branch. Recursive descent + AST; outputs syntax elements and error codes. |
-| **Semantics/Symbol Table** | `semantic` | ⏳ Pending | Scope management and type checking. |
+| **Lexical Analysis** | `lexer` | ✅ Completed | Token recognition and error handling; outputs `output.txt` / `error.txt`. |
+| **Syntax Analysis** | `parser` | ✅ Completed | Recursive descent + AST; outputs `parser.txt` / `error.txt`. |
+| **Semantics / Symbol Table** | `analyzer` | ✅ Completed | Symbol table, scopes (RAII), Visitor traversal; outputs `symbol.txt` / `error.txt`. |
 | **Intermediate Code** | `ir` | ⏳ Pending | LLVM IR generation. |
-| **Target Code** | `backend` | ⏳ Pending | **Core Goal**: MIPS generation + register allocation optimization. |
+| **Target Code** | `backend` | ⏳ Pending | **Core goal**: MIPS generation + register allocation optimization. |
 
 ------
 
@@ -76,7 +76,7 @@ When using lexical analysis only, the program reads `testfile.txt` and can produ
 
 ### 3. Project Structure (Lexer)
 
-Core lexer files: `include/Token.h`, `include/TokenType.h`, `include/Lexer.h`, `src/Lexer.cpp`, `src/TokenType.cpp`. The full directory tree is given under **Project Structure (Parser branch)** below.
+Core lexer files: `include/Token.h`, `include/TokenType.h`, `include/Lexer.h`, `src/Lexer.cpp`, `src/TokenType.cpp`. The full directory tree is given under **Project Structure (including semantic analysis)** below.
 
 ------
 
@@ -90,49 +90,70 @@ Building on the lexer, the parser performs recursive-descent syntax analysis and
 - **Lexer interaction**: **Pull model**—the parser drives the lexer via `Advance()`; the lexer provides `PeekNext()` / `PeekNext2()` for 1- and 2-token lookahead.
 - **AST design**: Parsing is decoupled from tree storage; expressions are unified under **Exp** (LVal, Number, BinaryExp, UnaryExp, FuncCall, etc.), with binary operations as left-associative **BinaryExp(lhs, rhs, op)**. See the [Parser design document](docs/design_documents/parser.md) for details.
 
-### 2. I/O Specification (Parser branch)
+### 2. I/O Specification (Parser stage)
 
-The program reads `testfile.txt` from the working directory, runs **Lexer + Parser**, and writes output as follows:
+When running **Lexer + Parser**, the program reads `testfile.txt`; if parser output is enabled it produces `parser.txt` (on success) or contributes to a merged `error.txt` (lexical type-a, syntax i/j/k, etc.). See [Experiment 2 Requirements](docs/course_info/requirement_2_parser.md).
 
-| **Scenario** | **Input File** | **Output File** | **Output Format** |
-| :--- | :--- | :--- | :--- |
-| **Correct source** | `testfile.txt` | `parser.txt` | In read order: each line `TokenCode TokenValue` or a single line `<SyntaxElement>` (e.g. `<Stmt>`) |
-| **Errors present** | `testfile.txt` | `error.txt` | `LineNumber ErrorCode` (one per line, sorted by line; merges lexical Type A and syntax i/j/k errors) |
+### 3. Project Structure (including semantic analysis)
 
-> **Note**:
->
-> - See the [Experiment 2 Requirements](docs/course_info/requirement_2_parser.md) for the full output specification.
-> - Syntax error codes **i** (missing semicolon), **j** (missing `)`), **k** (missing `]`) are reported by the parser; a full lexer + parser pass is always completed and all errors are output.
-
-### 3. Project Structure (Parser branch)
+The main pipeline is **Lexer → Parser → SemanticAnalyzer**. Final output is defined by the semantic stage: **no errors** → `symbol.txt`; **any errors** → merged `error.txt` from all three stages.
 
 ```Plaintext
 .
-├── CMakeLists.txt          # C++17 standard build configuration
+├── CMakeLists.txt
 ├── src/
-│   ├── main.cpp            # Entry: read testfile.txt, run Lexer + Parser, write parser.txt / error.txt
-│   ├── Lexer.cpp           # Lexical analysis core
-│   ├── parser.cpp          # Syntax analysis core (recursive descent + AST construction)
-│   └── TokenType.cpp       # Token string conversion
+│   ├── main.cpp            # Entry: read testfile.txt, Lexer → Parser → SemanticAnalyzer, write symbol.txt / error.txt
+│   ├── Lexer.cpp
+│   ├── parser.cpp         # Recursive descent + AST construction
+│   ├── SemanticAnalyzer.cpp # Semantic Visitor: symbol table, scopes, errors b/c/d/e/f/g/h/l/m
+│   ├── SymbolTable.cpp    # Scope stack, Lookup/Register
+│   ├── Symbol.cpp         # Symbol type and FormatForOutput
+│   ├── ScopeGuard.cpp     # RAII scope guard
+│   └── TokenType.cpp
 ├── include/
-│   ├── Lexer.h             # Lexer class
-│   ├── Parser.h            # Parser class and parsing interface
-│   ├── AST.h               # AST node definitions (CompUnit, Decl, Stmt, Exp, etc.)
-│   ├── Token.h             # Token structure and related types
-│   └── TokenType.h         # Token type codes (enum class)
+│   ├── Lexer.h
+│   ├── Parser.h
+│   ├── AST.h              # AST nodes and Accept(Visitor)
+│   ├── ASTVisitor.h       # Visitor interface
+│   ├── SemanticAnalyzer.h # Semantic analysis Visitor implementation
+│   ├── SymbolTable.h
+│   ├── Symbol.h
+│   ├── ScopeGuard.h
+│   ├── Token.h
+│   └── TokenType.h
 └── docs/
-    ├── course_info/        # Course materials and requirements
+    ├── course_info/
     │   ├── 2024_SysY_grammar.md
     │   ├── 2024_SysY_detailed.md
     │   ├── requirement_1_lexer.md
     │   ├── requirement_2_parser.md
-    │   ├── requirement_3_semantics.md
-    │   ├── requirement_4_codegen_simple.md
-    │   └── requirement_5_codegen.md
-    └── design_documents/   # Design notes
+    │   ├── requirement_3_analyzer.md
+    │   └── ...
+    └── design_documents/
         ├── lexer.md
-        └── parser.md
+        ├── parser.md
+        └── semantic_analyzer.md   # Symbol table, scope flattening, constant folding, error detection, etc.
 ```
+
+------
+
+## Semantic Analysis (Semantic Analyzer)
+
+### 1. Overview
+
+A single **Visitor** pass over the AST maintains a stack-based symbol table and scopes: declarations are registered, uses are looked up and checked, and constant folding is performed for ConstExp and array dimensions.
+
+- **Scopes**: Stack-based table with **ScopeGuard (RAII)**; entering a Block or function body does a PushScope, leaving does PopScope. Function parameters and body share one scope (see “function scope flattening” in the design doc).
+- **Errors**: Collected without throwing; supports course error codes b/c/d/e/f/g/h/l/m. Error **g** (missing return) follows the course’s simplified rule: only the last statement of the function body is checked for a return; see [2024_SysY_detailed.md](docs/course_info/2024_SysY_detailed.md) and the [semantic analysis design doc](docs/design_documents/semantic_analyzer.md).
+
+### 2. I/O Specification (semantic stage)
+
+| **Scenario** | **Input** | **Output file** | **Output format** |
+| :--- | :--- | :--- | :--- |
+| **Correct source** | `testfile.txt` | `symbol.txt` | `ScopeId Identifier TypeName` (e.g. `1 year ConstInt`) |
+| **Errors present** | `testfile.txt` | `error.txt` | `LineNumber ErrorCode` (lex + parse + semantic merged, sorted by line) |
+
+See [Experiment 3 Requirements](docs/course_info/requirement_3_analyzer.md). The name `main` is not entered in the symbol table; symbol output can be turned off in the driver for use as a full compiler later.
 
 ------
 
@@ -154,7 +175,10 @@ cmake --build .
 
 ### Usage
 
-Ensure `testfile.txt` is in the same directory as the executable (or adjust according to your IDE's working directory). The program writes `parser.txt` when there are no errors, or `error.txt` when lexical/syntax errors exist:
+Place `testfile.txt` in the executable’s working directory (or set the IDE run configuration accordingly). The program runs **Lexer → Parser → SemanticAnalyzer** and produces:
+
+- **No errors**: `symbol.txt` (scope id, identifier, type name). If parser output is enabled, `parser.txt` is also written.
+- **Any errors**: `error.txt` (line number + error code; lex, parse, and semantic errors merged and sorted by line).
 
 ```Bash
 # Linux / macOS
@@ -185,7 +209,6 @@ Ensure `testfile.txt` is in the same directory as the executable (or adjust acco
 
 ## 📄 References
 
-- [Experiment 1 Requirements (Lexer)](docs/course_info/requirement_1_lexer.md)
-- [Experiment 2 Requirements (Parser)](docs/course_info/requirement_2_parser.md)
-- [SysY Grammar](docs/course_info/2024_SysY_grammar.md), [SysY Detailed Definition](docs/course_info/2024_SysY_detailed.md)
-- [Lexer Design](docs/design_documents/lexer.md), [Parser Design](docs/design_documents/parser.md)
+- [Experiment 1 (Lexer)](docs/course_info/requirement_1_lexer.md), [Experiment 2 (Parser)](docs/course_info/requirement_2_parser.md), [Experiment 3 (Semantic analysis)](docs/course_info/requirement_3_analyzer.md)
+- [SysY Grammar](docs/course_info/2024_SysY_grammar.md), [SysY detailed definition](docs/course_info/2024_SysY_detailed.md)
+- [Lexer design](docs/design_documents/lexer.md), [Parser design](docs/design_documents/parser.md), [Semantic analyzer design](docs/design_documents/semantic_analyzer.md)
