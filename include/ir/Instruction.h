@@ -8,7 +8,6 @@
 #pragma once
 
 #include "ir/User.h"
-#include <AST.h>
 #include <ostream>
 #include <string>
 #include <vector>
@@ -67,19 +66,22 @@ namespace ir {
         void Print(std::ostream& os) const override;
     };
 
+    /** @brief IR-level binary arithmetic op (decoupled from AST OpType). */
+    enum class BinaryOp { ADD, SUB, MUL, DIV, REM };
+
     /** @brief Binary op: add, sub, mul, sdiv, srem, etc. */
     class BinaryInst : public Instruction {
     public:
         BinaryInst();
-        BinaryInst(const std::string& name, Type* type, BasicBlock* parent, OpType op, Value* lhs,
+        BinaryInst(const std::string& name, Type* type, BasicBlock* parent, BinaryOp op, Value* lhs,
                    Value* rhs);
-        OpType GetOp() const;
+        BinaryOp GetOp() const;
         Value* GetLhs() const;
         Value* GetRhs() const;
         void Print(std::ostream& os) const override;
 
     private:
-        OpType op_;
+        BinaryOp op_;
     };
 
     /** @brief br: conditional or unconditional branch. */

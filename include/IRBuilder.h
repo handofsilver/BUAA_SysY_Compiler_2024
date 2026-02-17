@@ -11,7 +11,6 @@
 #include "ir/Instruction.h"
 #include "ir/Module.h"
 #include "ir/Type.h"
-#include <AST.h>
 #include <string>
 #include <vector>
 
@@ -123,7 +122,7 @@ namespace ir {
         // -------------------------------------------------------------------------
 
         /** @brief Create binary op: %res = op type %lhs, %rhs (add, sub, mul, sdiv, srem). */
-        Instruction* CreateBinary(OpType op, Value* lhs, Value* rhs) {
+        Instruction* CreateBinary(BinaryOp op, Value* lhs, Value* rhs) {
             BasicBlock* bb = GetInsertBlock();
             if (!bb || !lhs || !rhs) {
                 return nullptr;

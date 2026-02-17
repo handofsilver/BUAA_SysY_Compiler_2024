@@ -8,16 +8,15 @@
  */
 #pragma once
 
+#include "AST.h"
+#include "ASTVisitor.h"
 #include "IRBuilder.h"
 #include "ir/Function.h"
 #include "ir/Module.h"
-#include <ASTVisitor.h>
 #include <map>
 #include <memory>
 #include <string>
 #include <vector>
-
-class Exp;
 
 class IRGenVisitor : public ASTVisitor {
 public:
@@ -170,13 +169,6 @@ private:
      */
     /** @brief Create alloca in entry block; name is next SSA number from builder_. */
     ir::Instruction* CreateEntryBlockAlloca(ir::Type* type);
-
-    /**
-     * @brief Evaluate a constant integer expression at compile time.
-     * Supports: Number, ConstExp (via inner), UnaryExp (+/-), BinaryExp (+ - * / %).
-     * Unsupported cases (e.g. LVal, function call) return 0.
-     */
-    int GetConstIntVal(Exp* exp);
 
     // -------------------------------------------------------------------------
     // Implicit type conversion (SysY int/char; see docs/ai_collab_notes/type_conversion.md)

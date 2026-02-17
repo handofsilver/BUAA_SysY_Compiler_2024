@@ -2,6 +2,7 @@
 
 #include "Token.h"
 #include <optional>
+#include <ostream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -10,7 +11,6 @@
  * Lexer: reads source, advances via Next(), sets current token.
  * Errors are recorded as (line number, error code) in GetErrorLog().
  */
-
 class Lexer {
 public:
     explicit Lexer(const char* file_path);
@@ -26,11 +26,22 @@ public:
         return cur_pos_ < source_.size();
     }
 
-    void Next();
+    /** Advance to next token. \p from_lookahead true => do not write to lexer_out (used by
+     * PeekNext). */
+    void Next(bool from_lookahead = false);
 
     /** Error log: (line number, error code). Merge with Parser::GetErrorLog() for error.txt. */
     const std::vector<std::pair<int, std::string>>& GetErrorLog() const {
         return error_log_;
+    }
+
+    /** When enabled, write "类别码 字符/字符串形式" per token to the given stream (e.g. lexer.txt).
+     */
+    void SetLexerOutput(std::ostream* out) {
+        lexer_out_ = out;
+    }
+    void SetEmitLexerOutput(bool enable) {
+        emit_lexer_output_ = enable;
     }
 
     /**
@@ -52,6 +63,8 @@ private:
     size_t line_num_;
     std::optional<Token> cur_token_;
     std::vector<std::pair<int, std::string>> error_log_;
+    std::ostream* lexer_out_{nullptr};
+    bool emit_lexer_output_{false};
 
     void SkipComment();
     void GetStringConst();

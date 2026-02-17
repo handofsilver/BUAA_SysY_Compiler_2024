@@ -11,18 +11,18 @@
 namespace ir {
 
     namespace {
-        const char* OpTypeToMnemonic(OpType op) {
+        const char* BinaryOpToMnemonic(BinaryOp op) {
             switch (op) {
-                case OpType::ADD: return "add";
-                case OpType::SUB: return "sub";
-                case OpType::MUL: return "mul";
-                case OpType::DIV: return "sdiv";
-                case OpType::MOD: return "srem";
+                case BinaryOp::ADD: return "add";
+                case BinaryOp::SUB: return "sub";
+                case BinaryOp::MUL: return "mul";
+                case BinaryOp::DIV: return "sdiv";
+                case BinaryOp::REM: return "srem";
                 default: return "add";
             }
         }
-        bool OpTypeHasNsw(OpType op) {
-            return op == OpType::ADD || op == OpType::SUB || op == OpType::MUL;
+        bool BinaryOpHasNsw(BinaryOp op) {
+            return op == BinaryOp::ADD || op == BinaryOp::SUB || op == BinaryOp::MUL;
         }
         const char* IcmpPredToMnemonic(IcmpPred pred) {
             switch (pred) {
@@ -150,7 +150,7 @@ namespace ir {
     // -----------------------------------------------------------------------------
     BinaryInst::BinaryInst() = default;
 
-    BinaryInst::BinaryInst(const std::string& name, Type* type, BasicBlock* parent, OpType op,
+    BinaryInst::BinaryInst(const std::string& name, Type* type, BasicBlock* parent, BinaryOp op,
                            Value* lhs, Value* rhs) :
     Instruction(name, type, parent),
     op_(op) {
@@ -159,7 +159,7 @@ namespace ir {
         SetOperand(1, rhs);
     }
 
-    OpType BinaryInst::GetOp() const {
+    BinaryOp BinaryInst::GetOp() const {
         return op_;
     }
 
@@ -174,9 +174,9 @@ namespace ir {
     void BinaryInst::Print(std::ostream& os) const {
         Value* lhs = GetLhs();
         Value* rhs = GetRhs();
-        const char* mnemonic = OpTypeToMnemonic(op_);
+        const char* mnemonic = BinaryOpToMnemonic(op_);
         os << "  %" << GetName() << " = " << mnemonic;
-        if (OpTypeHasNsw(op_)) {
+        if (BinaryOpHasNsw(op_)) {
             os << " nsw ";
         } else {
             os << " ";

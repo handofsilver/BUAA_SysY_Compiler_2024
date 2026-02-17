@@ -1,6 +1,6 @@
 
-#include <IRGenVisitor.h>
-#include <IRScopeGuard.h>
+#include "IRScopeGuard.h"
+#include "IRGenVisitor.h"
 
 IRScopeGuard::IRScopeGuard(IRGenVisitor& visitor) : visitor_(&visitor) {
     visitor_->PushScope();

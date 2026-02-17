@@ -18,7 +18,7 @@ Lexer::Lexer(const char* file_path) : cur_pos_(0), line_num_(0), cur_token_(std:
     source_ = oss.str();
 }
 
-void Lexer::Next() {
+void Lexer::Next(bool from_lookahead) {
     cur_token_ = std::nullopt;
 
     while (NotEnd()) {
@@ -58,6 +58,10 @@ void Lexer::Next() {
             GetDelimitor();
             break;
         }
+    }
+
+    if (emit_lexer_output_ && lexer_out_ && !from_lookahead && cur_token_.has_value()) {
+        *lexer_out_ << ToString(cur_token_->type) << " " << cur_token_->value << "\n";
     }
 }
 
@@ -196,7 +200,7 @@ std::optional<Token> Lexer::PeekNext() {
     const size_t kSavePos = cur_pos_;
     const size_t kSaveLine = line_num_;
     const std::optional<Token> kSaveToken = cur_token_;
-    Next();
+    Next(true);
     std::optional<Token> result = cur_token_;
     cur_pos_ = kSavePos;
     line_num_ = kSaveLine;
@@ -208,8 +212,8 @@ std::optional<Token> Lexer::PeekNext2() {
     const size_t kSavePos = cur_pos_;
     const size_t kSaveLine = line_num_;
     const std::optional<Token> kSaveToken = cur_token_;
-    Next();
-    Next();
+    Next(true);
+    Next(true);
     std::optional<Token> result = cur_token_;
     cur_pos_ = kSavePos;
     line_num_ = kSaveLine;

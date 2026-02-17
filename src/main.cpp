@@ -1,12 +1,11 @@
 /**
- * Compiler driver (requirement_2 parser + requirement_3 semantic analysis + requirement_5 codegen).
- * Reads testfile.txt, runs Lexer -> Parser -> SemanticAnalyzer [-> IRGenVisitor].
- * Output: error.txt (any errors) or symbol.txt + llvm_ir.txt (no errors).
+ * Compiler driver: reads testfile.txt, runs pipeline (Lexer -> Parser -> Semantic -> Codegen),
+ * writes error.txt (on errors) or lexer.txt / parser.txt / symbol.txt / llvm_ir.txt per
+ * requirements.
  */
-#include "IRGenVisitor.h"
-#include "Lexer.h"
-#include "Parser.h"
-#include "SemanticAnalyzer.h"
+#include "Driver.h"
+#include "Symbol.h"
+#include "ir/Module.h"
 #include <algorithm>
 #include <cerrno>
 #include <cstring>
@@ -15,15 +14,12 @@
 #include <iostream>
 #include <sstream>
 #include <string>
-#include <vector>
 
 int main() {
     try {
         std::ifstream in("testfile.txt");
         if (!in) {
             std::cerr << "Error: cannot open testfile.txt";
-
-            // Handle platform-specific error message formatting
 #ifdef _WIN32
             if (errno) {
                 char buf[96];
@@ -45,49 +41,31 @@ int main() {
         std::string source = buf.str();
         in.close();
 
-        Lexer lexer(std::move(source));
-        Parser parser(lexer);
+        const bool kEmitLexerOutput = true;  /* requirement_1: lexer.txt */
+        const bool kEmitParserOutput = true; /* requirement_2: parser.txt */
+        CompilerResult result = RunCompiler(source, kEmitLexerOutput, kEmitParserOutput);
 
-        std::ostringstream parser_out;
-        parser.SetParserOutput(&parser_out);
-        parser.SetEmitParserOutput(true);
-
-        auto comp_unit = parser.ParseCompUnit();
-
-        std::vector<std::pair<int, std::string>> all_errors;
-        for (const auto& p : lexer.GetErrorLog()) {
-            all_errors.push_back(p);
-        }
-        for (const auto& p : parser.GetErrorLog()) {
-            all_errors.push_back(p);
-        }
-
-        std::unique_ptr<SemanticAnalyzer> analyzer;
-        if (comp_unit) {
-            analyzer = std::make_unique<SemanticAnalyzer>();
-            analyzer->Analyze(*comp_unit);
-            for (const auto& p : analyzer->GetErrorLog()) {
-                all_errors.push_back(p);
-            }
-        }
-
-        std::sort(all_errors.begin(), all_errors.end(),
-                  [](const std::pair<int, std::string>& a, const std::pair<int, std::string>& b) {
-                      return a.first < b.first;
-                  });
-
-        const bool kEmitSymbolOutput =
-            false; // set false to disable symbol.txt (e.g. for full compiler)
-
-        if (!all_errors.empty()) {
+        if (result.has_errors) {
             std::ofstream err("error.txt");
-            for (const auto& p : all_errors) {
+            for (const auto& p : result.errors) {
                 err << p.first << " " << p.second << "\n";
             }
-        } else if (comp_unit && analyzer) {
-            if (kEmitSymbolOutput) {
+        } else {
+            if (kEmitLexerOutput && !result.lexer_output.empty()) {
+                std::ofstream lexer_out("lexer.txt");
+                lexer_out << result.lexer_output;
+            }
+            if (kEmitParserOutput && !result.parser_output.empty()) {
+                std::ofstream parser_out("parser.txt");
+                parser_out << result.parser_output;
+            }
+
+            const bool kEmitSymbolOutput = false;
+
+            if (kEmitSymbolOutput && result.analyzer) {
                 std::ofstream out("symbol.txt");
-                std::vector<std::pair<int, Symbol>> ordered_symbols = analyzer->GetOrderedSymbols();
+                std::vector<std::pair<int, Symbol>> ordered_symbols =
+                    result.analyzer->GetOrderedSymbols();
                 std::sort(ordered_symbols.begin(), ordered_symbols.end(),
                           [](const std::pair<int, Symbol>& a, const std::pair<int, Symbol>& b) {
                               return a.first < b.first;
@@ -97,11 +75,9 @@ int main() {
                 }
             }
 
-            IRGenVisitor ir_gen;
-            std::unique_ptr<ir::Module> module = ir_gen.Translate(*comp_unit);
-            if (module) {
+            if (result.module) {
                 std::ofstream llvm_out("llvm_ir.txt");
-                module->Print(llvm_out);
+                result.module->Print(llvm_out);
             }
         }
 
