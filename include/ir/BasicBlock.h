@@ -35,6 +35,9 @@ namespace ir {
         /** @brief Append instruction to this block; sets inst's parent to this. */
         void AddInstruction(std::unique_ptr<Instruction> inst);
 
+        /** @brief Insert instruction at the front of this block (e.g. for allocas in entry). */
+        void AddInstructionAtFront(std::unique_ptr<Instruction> inst);
+
         void PrintAsOperand(std::ostream& os) const override;
         void Print(std::ostream& os) const;
 

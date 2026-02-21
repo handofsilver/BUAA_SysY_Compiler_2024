@@ -134,6 +134,8 @@ private:
 
     /**
      * @brief Create a new BasicBlock, add it to current_function_, return raw pointer.
+     * Labels are unique per function: "entry" is kept as-is; others get "name.N" using
+     * builder_->GetNextSSAName() (reuses SSA counter, no extra block_counter).
      */
     ir::BasicBlock* CreateBasicBlock(const std::string& name);
 
@@ -200,10 +202,11 @@ private:
     int EvalArraySizeFromConstExp(ConstExp* cexp);
 
     /** Build a constant scalar initializer (i32 or i8 constant). */
-    ir::Constant* BuildConstScalarInit(int val) const;
+    ir::ConstantInt* BuildConstScalarInit(int val) const;
 
     /** Build a constant array initializer from a list of integer values. */
-    ir::Constant* BuildConstArrayInit(ir::ArrayType* arr_ty, const std::vector<int>& values) const;
+    ir::ConstantArray* BuildConstArrayInit(ir::ArrayType* arr_ty,
+                                           const std::vector<int>& values) const;
 
     void EmitGlobalConstDef(ConstDef& const_def, ir::Type* elem_type);
     void EmitLocalConstDef(ConstDef& const_def, ir::Type* elem_type);

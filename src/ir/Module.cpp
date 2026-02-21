@@ -9,15 +9,14 @@
  * declarations for actually used lib functions appear in the module.
  */
 #include "ir/Module.h"
-
+#include <cassert>
 namespace ir {
 
     Module::~Module() = default;
 
     PointerType* Module::GetPointerType(Type* pointee_type) {
-        if (!pointee_type) {
-            return nullptr;
-        }
+        assert(pointee_type);
+
         auto it = ptr_type_cache_.find(pointee_type);
         if (it != ptr_type_cache_.end()) {
             return it->second;
@@ -31,19 +30,25 @@ namespace ir {
     IntegerType* Module::GetI32Type() {
         if (integer_types_.empty()) {
             integer_types_.push_back(std::make_unique<IntegerType>(32));
+            integer_types_.push_back(std::make_unique<IntegerType>(8));
+            integer_types_.push_back(std::make_unique<IntegerType>(1));
         }
         return integer_types_[0].get();
     }
 
     IntegerType* Module::GetI8Type() {
-        if (integer_types_.size() < 2u) {
+        if (integer_types_.empty()) {
+            integer_types_.push_back(std::make_unique<IntegerType>(32));
             integer_types_.push_back(std::make_unique<IntegerType>(8));
+            integer_types_.push_back(std::make_unique<IntegerType>(1));
         }
         return integer_types_[1].get();
     }
 
     IntegerType* Module::GetI1Type() {
-        if (integer_types_.size() < 3u) {
+        if (integer_types_.empty()) {
+            integer_types_.push_back(std::make_unique<IntegerType>(32));
+            integer_types_.push_back(std::make_unique<IntegerType>(8));
             integer_types_.push_back(std::make_unique<IntegerType>(1));
         }
         return integer_types_[2].get();
@@ -64,18 +69,14 @@ namespace ir {
     }
 
     ArrayType* Module::GetArrayType(Type* element_type, unsigned num_elements) {
-        if (!element_type) {
-            return nullptr;
-        }
+        assert(element_type && num_elements > 0);
         array_types_.push_back(std::make_unique<ArrayType>(element_type, num_elements));
         return array_types_.back().get();
     }
 
     ConstantArray* Module::CreateConstantArray(ArrayType* type,
                                                const std::vector<Constant*>& elements) {
-        if (!type) {
-            return nullptr;
-        }
+        assert(type && !elements.empty());
         auto c = std::make_unique<ConstantArray>("", type, elements);
         ConstantArray* p = c.get();
         other_constants_.push_back(std::move(c));

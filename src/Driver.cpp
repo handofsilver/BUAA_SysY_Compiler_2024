@@ -1,17 +1,19 @@
 /**
  * @file Driver.cpp
  * @brief Implementation of RunCompiler pipeline.
+ * All front-end outputs (lexer, parser, symbol) are collected here; main only does file I/O.
  */
 #include "Driver.h"
 #include "IRGenVisitor.h"
 #include "Lexer.h"
 #include "Parser.h"
+#include "Symbol.h"
 #include <algorithm>
 #include <memory>
 #include <sstream>
 
 CompilerResult RunCompiler(const std::string& source, bool emit_lexer_output,
-                           bool emit_parser_output) {
+                           bool emit_parser_output, bool emit_symbol_output) {
     CompilerResult result;
     std::string src = source;
     Lexer lexer(std::move(src));
@@ -65,6 +67,19 @@ CompilerResult RunCompiler(const std::string& source, bool emit_lexer_output,
 
     if (result.has_errors) {
         return result;
+    }
+
+    if (emit_symbol_output && result.analyzer) {
+        std::vector<std::pair<int, Symbol>> ordered = result.analyzer->GetOrderedSymbols();
+        std::sort(ordered.begin(), ordered.end(),
+                  [](const std::pair<int, Symbol>& a, const std::pair<int, Symbol>& b) {
+                      return a.first < b.first;
+                  });
+        std::ostringstream sym_out;
+        for (const auto& p : ordered) {
+            sym_out << p.second.FormatForOutput() << "\n";
+        }
+        result.symbol_output = sym_out.str();
     }
 
     if (result.comp_unit) {

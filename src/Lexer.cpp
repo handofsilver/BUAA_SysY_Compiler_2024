@@ -99,6 +99,7 @@ void Lexer::SkipComment() {
 void Lexer::GetStringConst() {
     std::string str_const;
     str_const.reserve(64);
+    cur_pos_++;
     do {
         str_const += source_[cur_pos_++];
         if (NotEnd() && source_[cur_pos_] == '\\') {
@@ -109,7 +110,7 @@ void Lexer::GetStringConst() {
         }
     } while (NotEnd() && source_[cur_pos_] != '\"');
     if (NotEnd() && source_[cur_pos_] == '\"') {
-        str_const += source_[cur_pos_++];
+        cur_pos_++;
     }
     cur_token_ = Token(TokenType::STRCON, static_cast<int>(line_num_ + 1), std::move(str_const));
 }
@@ -117,6 +118,7 @@ void Lexer::GetStringConst() {
 void Lexer::GetCharConst() {
     std::string char_const;
     char_const.reserve(64);
+    cur_pos_++;
     do {
         char_const += source_[cur_pos_++];
         if (NotEnd() && source_[cur_pos_] == '\\') {
@@ -127,7 +129,7 @@ void Lexer::GetCharConst() {
         }
     } while (NotEnd() && source_[cur_pos_] != '\'');
     if (NotEnd() && source_[cur_pos_] == '\'') {
-        char_const += source_[cur_pos_++];
+        cur_pos_++;
     }
     cur_token_ = Token(TokenType::CHRCON, static_cast<int>(line_num_ + 1), std::move(char_const));
 }

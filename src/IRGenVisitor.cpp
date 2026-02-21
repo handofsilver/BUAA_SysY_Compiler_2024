@@ -64,10 +64,11 @@ void IRGenVisitor::PopScope() {
 // -----------------------------------------------------------------------------
 
 ir::BasicBlock* IRGenVisitor::CreateBasicBlock(const std::string& name) {
-    if (!current_function_) {
+    if (!current_function_ || !builder_) {
         return nullptr;
     }
-    auto block = std::make_unique<ir::BasicBlock>(name);
+    std::string label = (name == "entry") ? name : (name + "." + builder_->GetNextSSAName());
+    auto block = std::make_unique<ir::BasicBlock>(label);
     ir::BasicBlock* ptr = block.get();
     current_function_->AddBlock(std::move(block));
     return ptr;
@@ -198,8 +199,7 @@ ir::Instruction* IRGenVisitor::CreateEntryBlockAlloca(ir::Type* type) {
     std::string name = builder_->GetNextSSAName();
     auto inst = std::make_unique<ir::AllocaInst>(name, ptr_type, entry);
     ir::Instruction* result = inst.get();
-    entry->AddInstruction(std::move(inst)); // append to entry; no insert-point change (allocas stay
-                                            // at front while we only process params)
+    entry->AddInstruction(std::move(inst));
     return result;
 }
 
@@ -270,14 +270,14 @@ int IRGenVisitor::EvalArraySizeFromConstExp(ConstExp* cexp) {
     return (n <= 0) ? 1 : n;
 }
 
-ir::Constant* IRGenVisitor::BuildConstScalarInit(int val) const {
+ir::ConstantInt* IRGenVisitor::BuildConstScalarInit(int val) const {
     return (current_decl_btype_ == BType::CHAR) ?
-               static_cast<ir::Constant*>(module_->GetInt8Constant(val)) :
-               static_cast<ir::Constant*>(module_->GetInt32Constant(val));
+               static_cast<ir::ConstantInt*>(module_->GetInt8Constant(val)) :
+               static_cast<ir::ConstantInt*>(module_->GetInt32Constant(val));
 }
 
-ir::Constant* IRGenVisitor::BuildConstArrayInit(ir::ArrayType* arr_ty,
-                                                const std::vector<int>& values) const {
+ir::ConstantArray* IRGenVisitor::BuildConstArrayInit(ir::ArrayType* arr_ty,
+                                                     const std::vector<int>& values) const {
     std::vector<ir::Constant*> inits;
     for (int v : values) {
         inits.push_back(BuildConstScalarInit(v));
@@ -296,13 +296,21 @@ void IRGenVisitor::EmitGlobalConstDef(ConstDef& const_def, ir::Type* elem_type) 
         ir::ArrayType* arr_ty = module_->GetArrayType(elem_type, static_cast<unsigned>(n));
         var_type = arr_ty;
 
-        // Parse init: ConstInitVal is variant<SingleExp, ExpList, StringVal>; we need ExpList.
+        // Parse init: ConstInitVal is variant<SingleExp, ExpList, StringVal>; we need ExpList or
+        // StringVal.
         std::vector<int> values;
         auto* list = std::get_if<ConstInitVal::ExpList>(&const_def.const_init_val->value);
         if (list) {
             for (auto& cexp : *list) {
                 values.push_back(irgen::EvalConstInt(cexp->inner.get()));
             }
+        }
+        auto* str = std::get_if<ConstInitVal::StringVal>(&const_def.const_init_val->value);
+        if (str) {
+            for (unsigned char c : *str) {
+                values.push_back(static_cast<int>(c));
+            }
+            values.push_back(0); // null terminator for string literal
         }
         // Pad with zeros if init list is shorter than n (e.g. int a[5] = {1,2}; -> 1,2,0,0,0).
         while (static_cast<int>(values.size()) < n) {
@@ -320,8 +328,9 @@ void IRGenVisitor::EmitGlobalConstDef(ConstDef& const_def, ir::Type* elem_type) 
         init = BuildConstScalarInit(val);
     }
 
-    // Globals: scalar has type T, array has type T* (pointer to [N x T]). Then create and bind.
-    ir::Type* global_type = kIsArray ? module_->GetPointerType(var_type) : var_type;
+    // Globals: in LLVM IR the name denotes the address, so type is always pointer (i32* or [N x
+    // T]*).
+    ir::Type* global_type = module_->GetPointerType(var_type);
     ir::GlobalVar* gv = module_->CreateGlobalVar(const_def.ident, global_type, init, true);
     RegisterVariable(const_def.ident, gv);
 }
@@ -346,6 +355,42 @@ void IRGenVisitor::EmitLocalConstDef(ConstDef& const_def, ir::Type* elem_type) {
                     module_->GetPointerType(elem_type), alloca, module_->GetInt32Constant(0), idx);
                 if (gep && to_store) {
                     builder_->CreateStore(to_store, gep);
+                }
+            }
+        } else {
+            auto* str = std::get_if<ConstInitVal::StringVal>(&const_def.const_init_val->value);
+            if (str && builder_->GetInsertBlock()) {
+                // String literal: emit global [len+1 x i8], then copy bytes into local alloca
+                ir::Value* global_str = EmitGlobalStringLiteral(*str);
+                ir::Type* i8 = module_->GetI8Type();
+                size_t copy_len =
+                    static_cast<size_t>(std::min(n, static_cast<int>(str->size()) + 1));
+                for (size_t i = 0; i < copy_len; ++i) {
+                    ir::Value* idx = module_->GetInt32Constant(static_cast<int64_t>(i));
+                    ir::Instruction* src_gep = builder_->CreateGEP(
+                        module_->GetPointerType(i8), global_str, module_->GetInt32Constant(0), idx);
+                    if (!src_gep) {
+                        continue;
+                    }
+                    ir::Instruction* load = builder_->CreateLoad(src_gep);
+                    if (!load) {
+                        continue;
+                    }
+                    ir::Instruction* dst_gep =
+                        builder_->CreateGEP(module_->GetPointerType(elem_type), alloca,
+                                            module_->GetInt32Constant(0), idx);
+                    if (dst_gep) {
+                        builder_->CreateStore(load, dst_gep);
+                    }
+                }
+                for (size_t i = copy_len; i < static_cast<size_t>(n); ++i) {
+                    ir::Value* idx = module_->GetInt32Constant(static_cast<int64_t>(i));
+                    ir::Instruction* dst_gep =
+                        builder_->CreateGEP(module_->GetPointerType(elem_type), alloca,
+                                            module_->GetInt32Constant(0), idx);
+                    if (dst_gep) {
+                        builder_->CreateStore(module_->GetInt8Constant(0), dst_gep);
+                    }
                 }
             }
         }
@@ -383,11 +428,17 @@ void IRGenVisitor::EmitGlobalVarDef(VarDef& var_def, ir::Type* elem_type) {
                     values.push_back(irgen::EvalConstInt(e.get()));
                 }
             }
+            auto* str = std::get_if<InitVal::StringVal>(&var_def.init_val->value);
+            if (str) {
+                for (unsigned char c : *str) {
+                    values.push_back(static_cast<int>(c));
+                }
+            }
+            while (static_cast<int>(values.size()) < n) {
+                values.push_back(0);
+            }
+            init = BuildConstArrayInit(arr_ty, values);
         }
-        while (static_cast<int>(values.size()) < n) {
-            values.push_back(0);
-        }
-        init = BuildConstArrayInit(arr_ty, values);
     } else {
         // --- Global var scalar: T, optional ConstantInt init ---
         var_type = elem_type;
@@ -401,7 +452,8 @@ void IRGenVisitor::EmitGlobalVarDef(VarDef& var_def, ir::Type* elem_type) {
         }
     }
 
-    ir::Type* global_type = kIsArray ? module_->GetPointerType(var_type) : var_type;
+    // In LLVM IR the global name denotes the address, so type is always pointer (i32* or [N x T]*).
+    ir::Type* global_type = module_->GetPointerType(var_type);
     ir::GlobalVar* gv = module_->CreateGlobalVar(var_def.ident, global_type, init, false);
     RegisterVariable(var_def.ident, gv);
 }
@@ -419,7 +471,7 @@ void IRGenVisitor::EmitLocalVarDef(VarDef& var_def, ir::Type* elem_type) {
         ir::Instruction* alloca = CreateEntryBlockAlloca(arr_ty);
         RegisterVariable(var_def.ident, alloca);
 
-        // If init present: visit each Exp in the list (runtime eval), then GEP + Store.
+        // If init present: visit each Exp in the list (runtime eval), or copy string literal.
         if (var_def.init_val && builder_->GetInsertBlock()) {
             auto* list = std::get_if<InitVal::ExpList>(&var_def.init_val->value);
             if (list) {
@@ -434,6 +486,43 @@ void IRGenVisitor::EmitLocalVarDef(VarDef& var_def, ir::Type* elem_type) {
                                                 module_->GetInt32Constant(0), idx);
                         if (gep) {
                             builder_->CreateStore(val, gep);
+                        }
+                    }
+                }
+            } else {
+                auto* str = std::get_if<InitVal::StringVal>(&var_def.init_val->value);
+                if (str) {
+                    // String literal: emit global [len+1 x i8], then copy bytes into local alloca
+                    ir::Value* global_str = EmitGlobalStringLiteral(*str);
+                    ir::Type* i8 = module_->GetI8Type();
+                    size_t copy_len =
+                        static_cast<size_t>(std::min(n, static_cast<int>(str->size()) + 1));
+                    for (size_t i = 0; i < copy_len; ++i) {
+                        ir::Value* idx = module_->GetInt32Constant(static_cast<int64_t>(i));
+                        ir::Instruction* src_gep =
+                            builder_->CreateGEP(module_->GetPointerType(i8), global_str,
+                                                module_->GetInt32Constant(0), idx);
+                        if (!src_gep) {
+                            continue;
+                        }
+                        ir::Instruction* load = builder_->CreateLoad(src_gep);
+                        if (!load) {
+                            continue;
+                        }
+                        ir::Instruction* dst_gep =
+                            builder_->CreateGEP(module_->GetPointerType(elem_type), alloca,
+                                                module_->GetInt32Constant(0), idx);
+                        if (dst_gep) {
+                            builder_->CreateStore(load, dst_gep);
+                        }
+                    }
+                    for (size_t i = copy_len; i < static_cast<size_t>(n); ++i) {
+                        ir::Value* idx = module_->GetInt32Constant(static_cast<int64_t>(i));
+                        ir::Instruction* dst_gep =
+                            builder_->CreateGEP(module_->GetPointerType(elem_type), alloca,
+                                                module_->GetInt32Constant(0), idx);
+                        if (dst_gep) {
+                            builder_->CreateStore(module_->GetInt8Constant(0), dst_gep);
                         }
                     }
                 }
@@ -470,6 +559,6 @@ ir::Value* IRGenVisitor::EmitGlobalStringLiteral(const std::string& str) {
     ir::ArrayType* arr_ty = module_->GetArrayType(i8, static_cast<unsigned>(inits.size()));
     ir::Constant* init = module_->CreateConstantArray(arr_ty, inits);
     std::string name = ".str." + std::to_string(printf_str_counter_++);
-    ir::GlobalVar* g = module_->CreateGlobalVar(name, module_->GetPointerType(arr_ty), init, true);
-    return g;
+    ir::GlobalVar* gv = module_->CreateGlobalVar(name, module_->GetPointerType(arr_ty), init, true);
+    return gv;
 }

@@ -31,13 +31,13 @@ void IRGenVisitor::VisitAssignStmt(AssignStmt& assign_stmt) {
     is_lval_mode_ = false;
     assign_stmt.exp->Accept(*this);
     ir::Value* val = temp_value_;
-    if (addr && val && builder_->GetInsertBlock()) {
-        ir::Type* target_ty = GetPointeeType(addr);
-        if (target_ty) {
-            val = ConvertToTargetType(val, target_ty);
-        }
-        builder_->CreateStore(val, addr);
-    }
+
+    assert(addr != nullptr && val != nullptr && builder_->GetInsertBlock() != nullptr);
+    ir::Type* target_ty = GetPointeeType(addr);
+
+    assert(target_ty != nullptr);
+    val = ConvertToTargetType(val, target_ty);
+    builder_->CreateStore(val, addr);
 }
 
 void IRGenVisitor::VisitExpStmt(ExpStmt& exp_stmt) {

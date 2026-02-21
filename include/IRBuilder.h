@@ -11,6 +11,8 @@
 #include "ir/Instruction.h"
 #include "ir/Module.h"
 #include "ir/Type.h"
+#include "irgen/SSANameAllocator.h"
+#include <cassert>
 #include <string>
 #include <vector>
 
@@ -49,12 +51,12 @@ namespace ir {
         /** @brief Reset SSA counter (call at function entry). Next GetNextSSAName() will return \p
          * start. Use param count so params stay %0,%1,... and first alloca/inst is %param_count. */
         void ResetSSACounter(int start = 0) {
-            ssa_counter_ = start;
+            ssa_allocator_.Reset(start);
         }
 
-        /** @brief Return next SSA name (e.g. "1", "2") for value-producing instructions. */
+        /** @brief Return next SSA name (e.g. "0", "1", ...) for value-producing instructions. */
         std::string GetNextSSAName() {
-            return std::to_string(ssa_counter_++);
+            return ssa_allocator_.Next();
         }
 
         // -------------------------------------------------------------------------
@@ -67,9 +69,7 @@ namespace ir {
          */
         template <typename InstType, typename... Args>
         InstType* Create(Args&&... args) {
-            if (insert_point_ == nullptr) {
-                return nullptr;
-            }
+            assert(insert_point_ != nullptr);
             auto inst = std::make_unique<InstType>(std::forward<Args>(args)...);
             InstType* inst_ptr = inst.get();
             insert_point_->AddInstruction(std::move(inst));
@@ -84,9 +84,7 @@ namespace ir {
          * i32]). */
         Instruction* CreateAlloca(Type* type) {
             BasicBlock* bb = GetInsertBlock();
-            if (!bb || !type) {
-                return nullptr;
-            }
+            assert(bb != nullptr && type != nullptr);
             return Create<AllocaInst>(GetNextSSAName(), type, bb);
         }
 
@@ -97,13 +95,9 @@ namespace ir {
          */
         Instruction* CreateLoad(Value* ptr) {
             BasicBlock* bb = GetInsertBlock();
-            if (!bb || !ptr || !ptr->GetType()) {
-                return nullptr;
-            }
+            assert(bb != nullptr && ptr != nullptr && ptr->GetType() != nullptr);
             auto* ptr_ty = dynamic_cast<PointerType*>(ptr->GetType());
-            if (!ptr_ty) {
-                return nullptr;
-            }
+            assert(ptr_ty != nullptr);
             Type* elem_ty = ptr_ty->GetPointeeType();
             return Create<LoadInst>(GetNextSSAName(), elem_ty, bb, ptr);
         }
@@ -111,9 +105,7 @@ namespace ir {
         /** @brief Create store: store value into ptr. */
         Instruction* CreateStore(Value* value, Value* ptr) {
             BasicBlock* bb = GetInsertBlock();
-            if (!bb || !value || !ptr) {
-                return nullptr;
-            }
+            assert(bb != nullptr && value != nullptr && ptr != nullptr);
             return Create<StoreInst>("", value->GetType(), bb, value, ptr);
         }
 
@@ -124,9 +116,7 @@ namespace ir {
         /** @brief Create binary op: %res = op type %lhs, %rhs (add, sub, mul, sdiv, srem). */
         Instruction* CreateBinary(BinaryOp op, Value* lhs, Value* rhs) {
             BasicBlock* bb = GetInsertBlock();
-            if (!bb || !lhs || !rhs) {
-                return nullptr;
-            }
+            assert(bb != nullptr && lhs != nullptr && rhs != nullptr);
             return Create<BinaryInst>(GetNextSSAName(), lhs->GetType(), bb, op, lhs, rhs);
         }
 
@@ -137,27 +127,21 @@ namespace ir {
         /** @brief Create unconditional branch: br label %dest. */
         Instruction* CreateBr(BasicBlock* dest) {
             BasicBlock* bb = GetInsertBlock();
-            if (!bb || !dest) {
-                return nullptr;
-            }
+            assert(bb != nullptr && dest != nullptr);
             return Create<BranchInst>("", dest->GetType(), bb, dest);
         }
 
         /** @brief Create conditional branch: br i1 %cond, label %if_true, label %if_false. */
         Instruction* CreateCondBr(Value* cond, BasicBlock* if_true, BasicBlock* if_false) {
             BasicBlock* bb = GetInsertBlock();
-            if (!bb || !cond || !if_true || !if_false) {
-                return nullptr;
-            }
+            assert(bb != nullptr && cond != nullptr && if_true != nullptr && if_false != nullptr);
             return Create<BranchInst>("", cond->GetType(), bb, cond, if_true, if_false);
         }
 
         /** @brief Create return with value: ret type %val. */
         Instruction* CreateRet(Value* val) {
             BasicBlock* bb = GetInsertBlock();
-            if (!bb || !val) {
-                return nullptr;
-            }
+            assert(bb != nullptr && val != nullptr);
             return Create<ReturnInst>("", val->GetType(), bb, val);
         }
 
@@ -165,9 +149,7 @@ namespace ir {
          */
         Instruction* CreateRetVoid() {
             BasicBlock* bb = GetInsertBlock();
-            if (!bb || !module_) {
-                return nullptr;
-            }
+            assert(bb != nullptr && module_ != nullptr);
             return Create<ReturnInst>("", module_->GetVoidType(), bb);
         }
 
@@ -181,18 +163,14 @@ namespace ir {
          */
         Instruction* CreateCall(Type* ret_type, Value* callee, const std::vector<Value*>& args) {
             BasicBlock* bb = GetInsertBlock();
-            if (!bb || !callee) {
-                return nullptr;
-            }
+            assert(bb != nullptr && callee != nullptr);
             return Create<CallInst>(GetNextSSAName(), ret_type, bb, callee, args);
         }
 
         /** @brief Create getelementptr with one index: base + index. */
         Instruction* CreateGEP(Type* result_ptr_type, Value* base, Value* index) {
             BasicBlock* bb = GetInsertBlock();
-            if (!bb || !base || !index) {
-                return nullptr;
-            }
+            assert(bb != nullptr && base != nullptr && index != nullptr);
             return Create<GetElementPtrInst>(GetNextSSAName(), result_ptr_type, bb, base, index);
         }
 
@@ -201,9 +179,7 @@ namespace ir {
          */
         Instruction* CreateGEP(Type* result_ptr_type, Value* base, Value* index0, Value* index1) {
             BasicBlock* bb = GetInsertBlock();
-            if (!bb || !base || !index0 || !index1) {
-                return nullptr;
-            }
+            assert(bb != nullptr && base != nullptr && index0 != nullptr && index1 != nullptr);
             return Create<GetElementPtrInst>(GetNextSSAName(), result_ptr_type, bb, base, index0,
                                              index1);
         }
@@ -211,34 +187,28 @@ namespace ir {
         /** @brief Create icmp: result is i1. Pass GetI1Type() from Module as result_type. */
         Instruction* CreateIcmp(Type* result_type, IcmpPred pred, Value* lhs, Value* rhs) {
             BasicBlock* bb = GetInsertBlock();
-            if (!bb || !result_type || !lhs || !rhs) {
-                return nullptr;
-            }
+            assert(bb != nullptr && result_type != nullptr && lhs != nullptr && rhs != nullptr);
             return Create<IcmpInst>(GetNextSSAName(), result_type, bb, pred, lhs, rhs);
         }
 
         /** @brief Create zext from value to dest_type (e.g. i1 to i32). */
         Instruction* CreateZext(Value* value, Type* dest_type) {
             BasicBlock* bb = GetInsertBlock();
-            if (!bb || !value || !dest_type) {
-                return nullptr;
-            }
+            assert(bb != nullptr && value != nullptr && dest_type != nullptr);
             return Create<ZextInst>(GetNextSSAName(), dest_type, bb, value);
         }
 
         /** @brief Create trunc from value to dest_type (e.g. i32 to i8). */
         Instruction* CreateTrunc(Value* value, Type* dest_type) {
             BasicBlock* bb = GetInsertBlock();
-            if (!bb || !value || !dest_type) {
-                return nullptr;
-            }
+            assert(bb != nullptr && value != nullptr && dest_type != nullptr);
             return Create<TruncInst>(GetNextSSAName(), dest_type, bb, value);
         }
 
     private:
         BasicBlock* insert_point_ = nullptr;
         Module* module_ = nullptr;
-        int ssa_counter_ = 0;
+        SSANameAllocator ssa_allocator_;
     };
 
 } // namespace ir

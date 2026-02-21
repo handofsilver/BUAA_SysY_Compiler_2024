@@ -43,4 +43,11 @@ namespace ir {
         instructions_.push_back(std::move(inst));
     }
 
+    void BasicBlock::AddInstructionAtFront(std::unique_ptr<Instruction> inst) {
+        if (inst) {
+            inst->SetParent(this);
+        }
+        instructions_.push_front(std::move(inst));
+    }
+
 } // namespace ir
