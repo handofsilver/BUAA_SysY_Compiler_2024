@@ -88,6 +88,13 @@ private:
     bool is_lval_mode_ = false;
 
     /**
+     * @brief When true, the next LVal (array/ptr) used as function argument should pass
+     * the address (for pointer parameters), not the loaded value. Set per-argument in
+     * VisitFuncCall when collecting call args.
+     */
+    bool func_arg_want_pointer_ = false;
+
+    /**
      * @brief When true, we are in global scope (CompUnit-level Decl); declarations
      * produce global variables/constants instead of alloca.
      */

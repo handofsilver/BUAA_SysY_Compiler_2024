@@ -43,7 +43,12 @@ namespace ir {
                     for (size_t i = 0; i < elts.size(); ++i) {
                         auto* ci = dynamic_cast<ConstantInt*>(elts[i]);
                         if (ci && ci->GetValue() != 0) {
-                            os << static_cast<char>(ci->GetValue());
+                            char ch = static_cast<char>(ci->GetValue());
+                            if (ch == '\n') {
+                                os << "\\0A";
+                            } else {
+                                os << ch;
+                            }
                         } else {
                             os << "\\00";
                         }

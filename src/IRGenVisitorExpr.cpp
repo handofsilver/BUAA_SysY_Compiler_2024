@@ -19,9 +19,10 @@ void IRGenVisitor::VisitLVal(LVal& lval) {
         return;
     }
 
-    // scalar lval
+    // scalar lval or array name (no index)
     if (!lval.index.has_value() || !*lval.index) {
-        if (is_lval_mode_) {
+        if (is_lval_mode_ || func_arg_want_pointer_) {
+            // function argument needs pointer (array/pointer parameter): pass address, not load
             temp_value_ = value;
         } else {
             ir::Type* pointee = GetPointeeType(value);
@@ -153,13 +154,10 @@ void IRGenVisitor::VisitUnaryExp(UnaryExp& unary_exp) {
 
 void IRGenVisitor::VisitFuncCall(FuncCall& func_call) {
     ir::Function* callee = module_->GetFunction(func_call.ident);
-    if (!callee || !builder_->GetInsertBlock()) {
-        return;
-    }
-    call_args_.clear();
-    if (func_call.func_r_params) {
-        func_call.func_r_params->Accept(*this);
-    }
+
+    assert(callee != nullptr && builder_->GetInsertBlock() != nullptr);
+
+    // get return type and parameter types
     ir::Type* ret_type = nullptr;
     std::vector<ir::Type*> param_types;
     if (ir::Type* ft = callee->GetType()) {
@@ -168,13 +166,28 @@ void IRGenVisitor::VisitFuncCall(FuncCall& func_call) {
             param_types = fty->GetParamTypes();
         }
     }
+
+    // collect call arguments
+    call_args_.clear();
+    if (func_call.func_r_params) {
+        const auto& exps = func_call.func_r_params->exp_list;
+        assert(exps.size() == param_types.size());
+        for (size_t i = 0; i < exps.size(); ++i) {
+            func_arg_want_pointer_ = (dynamic_cast<ir::PointerType*>(param_types[i]) != nullptr);
+            exps[i]->Accept(*this);
+            func_arg_want_pointer_ = false;
+            if (temp_value_) {
+                call_args_.push_back(temp_value_);
+            }
+        }
+    }
+
+    // convert arguments to target types
+    assert(call_args_.size() == param_types.size());
     std::vector<ir::Value*> converted_args;
     for (size_t i = 0; i < call_args_.size(); ++i) {
         ir::Value* arg = call_args_[i];
-        if (i < param_types.size() && arg) {
-            arg = ConvertToTargetType(arg, param_types[i]);
-        }
-        converted_args.push_back(arg);
+        converted_args.push_back(ConvertToTargetType(arg, param_types[i]));
     }
     ir::Instruction* call = builder_->CreateCall(ret_type, callee, converted_args);
     if (call && ret_type && ret_type != module_->GetVoidType()) {
