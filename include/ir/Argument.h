@@ -20,7 +20,7 @@ namespace ir {
         Argument() = default;
         Argument(const std::string& name, Type* type) : Value(name, type) {}
 
-        void PrintAsOperand(std::ostream& os) const override;
+        void DefaultPrintAsOperand(std::ostream& os) const override;
     };
 
 } // namespace ir

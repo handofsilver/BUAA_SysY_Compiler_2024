@@ -9,7 +9,7 @@
 #include <ostream>
 namespace ir {
 
-    void GlobalVar::PrintAsOperand(std::ostream& os) const {
+    void GlobalVar::DefaultPrintAsOperand(std::ostream& os) const {
         os << "@" << GetName();
     }
 

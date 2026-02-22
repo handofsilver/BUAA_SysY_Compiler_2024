@@ -63,7 +63,7 @@ namespace ir {
         }
 
         /** @brief Print as operand: @name. */
-        void PrintAsOperand(std::ostream& os) const override;
+        void DefaultPrintAsOperand(std::ostream& os) const override;
 
         /** @brief Print declare or define to stream. */
         void Print(std::ostream& os) const;

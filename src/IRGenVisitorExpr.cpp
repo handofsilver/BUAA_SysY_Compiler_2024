@@ -19,6 +19,7 @@ void IRGenVisitor::VisitLVal(LVal& lval) {
         return;
     }
 
+    // scalar lval
     if (!lval.index.has_value() || !*lval.index) {
         if (is_lval_mode_) {
             temp_value_ = value;
@@ -34,7 +35,13 @@ void IRGenVisitor::VisitLVal(LVal& lval) {
         return;
     }
 
+    // array lval
+    // set is_lval_mode_ to false as index should not be used as lval
+    bool is_lval_mode_backup = is_lval_mode_;
+    is_lval_mode_ = false;
     (*lval.index)->Accept(*this);
+    is_lval_mode_ = is_lval_mode_backup;
+
     ir::Value* index_val = temp_value_;
     if (!index_val || !builder_->GetInsertBlock()) {
         return;

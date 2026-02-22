@@ -3,13 +3,14 @@
  * @brief PrintAsOperand and Print (declare/define) for Function.
  */
 #include "ir/Function.h"
+#include "ir/IRPrintContext.h"
 #include "ir/Type.h"
 #include <ostream>
 #include <string>
 
 namespace ir {
 
-    void Function::PrintAsOperand(std::ostream& os) const {
+    void Function::DefaultPrintAsOperand(std::ostream& os) const {
         os << "@" << GetName();
     }
 
@@ -41,7 +42,10 @@ namespace ir {
             return;
         }
 
-        // Definition.
+        // Definition: build print-time SSA/block renumbering, then print.
+        IRPrintContext ctx;
+        ctx.Build(this);
+
         os << "define dso_local ";
         if (return_type) {
             return_type->Print(os);
@@ -54,14 +58,19 @@ namespace ir {
             Argument* arg = args_[i].get();
             if (arg && arg->GetType()) {
                 arg->GetType()->Print(os);
-                os << " %" << (arg->GetName().empty() ? std::to_string(i) : arg->GetName());
+                std::string name;
+                if (ctx.GetSSAName(arg, name)) {
+                    os << " %" << name;
+                } else {
+                    os << " %" << (arg->GetName().empty() ? std::to_string(i) : arg->GetName());
+                }
             }
         }
         os << ") #0 {\n";
 
         for (const auto& block : blocks_) {
             if (block) {
-                block->Print(os);
+                block->Print(os, &ctx);
             }
         }
 

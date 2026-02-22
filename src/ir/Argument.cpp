@@ -7,7 +7,7 @@
 
 namespace ir {
 
-    void Argument::PrintAsOperand(std::ostream& os) const {
+    void Argument::DefaultPrintAsOperand(std::ostream& os) const {
         os << "%" << (GetName().empty() ? "0" : GetName());
     }
 

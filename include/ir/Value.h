@@ -17,6 +17,8 @@
 namespace ir {
 
     class Use;
+    class IRPrintContext;
+    class BasicBlock;
 
     /**
      * @brief Base class for all IR values (instructions, constants, arguments, etc.).
@@ -75,9 +77,14 @@ namespace ir {
 
         /**
          * @brief Print this value as an operand (e.g. %1, @main, i32 0).
-         * Overridden by ConstantInt, GlobalVar, Function, Argument, BasicBlock.
+         * If \p context is non-null, uses print-time SSA/block names when present.
          */
-        virtual void PrintAsOperand(std::ostream& os) const;
+        virtual void PrintAsOperand(std::ostream& os,
+                                    const IRPrintContext* context = nullptr) const;
+
+    protected:
+        /** @brief Override in subclasses for default (no-context) operand printing. */
+        virtual void DefaultPrintAsOperand(std::ostream& os) const;
 
     protected:
         std::string name_;

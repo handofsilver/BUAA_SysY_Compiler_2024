@@ -43,7 +43,7 @@ namespace ir {
             return value_;
         }
 
-        void PrintAsOperand(std::ostream& os) const override;
+        void DefaultPrintAsOperand(std::ostream& os) const override;
 
     private:
         int64_t value_;

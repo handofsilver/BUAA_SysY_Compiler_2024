@@ -8,21 +8,27 @@
 
 #include "ir/BasicBlock.h"
 #include "ir/Instruction.h"
+#include "ir/IRPrintContext.h"
 #include <ostream>
 
 namespace ir {
 
     BasicBlock::~BasicBlock() = default;
 
-    void BasicBlock::PrintAsOperand(std::ostream& os) const {
+    void BasicBlock::DefaultPrintAsOperand(std::ostream& os) const {
         os << "label %" << (GetName().empty() ? "0" : GetName());
     }
 
-    void BasicBlock::Print(std::ostream& os) const {
-        os << (GetName().empty() ? "0" : GetName()) << ":\n";
+    void BasicBlock::Print(std::ostream& os, const IRPrintContext* context) const {
+        std::string label;
+        if (context && context->GetBlockLabel(this, label)) {
+            os << label << ":\n";
+        } else {
+            os << (GetName().empty() ? "0" : GetName()) << ":\n";
+        }
         for (const auto& inst : instructions_) {
             if (inst) {
-                inst->Print(os);
+                inst->Print(os, context);
                 os << "\n";
             }
         }

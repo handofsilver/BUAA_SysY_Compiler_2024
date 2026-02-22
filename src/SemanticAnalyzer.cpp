@@ -390,7 +390,7 @@ void SemanticAnalyzer::VisitCharacter(Character& character) {
     current_exp_is_array_ = false;
 }
 
-// Constant folding: evaluate at visit time so ConstExp/array size get last_value_.
+// Constant folding: only when in_const_exp_ (ConstExp subtree); otherwise avoid div/mod by 0.
 void SemanticAnalyzer::VisitBinaryExp(BinaryExp& binary_exp) {
     if (binary_exp.lhs) {
         binary_exp.lhs->Accept(*this);
@@ -404,20 +404,23 @@ void SemanticAnalyzer::VisitBinaryExp(BinaryExp& binary_exp) {
 
     int right = last_value_;
     current_exp_is_array_ = false; // the result of the operation is a scalar
-    last_value_ = binary_exp.op == OpType::PLUS ? left + right :
-                  binary_exp.op == OpType::MINU ? left - right :
-                  binary_exp.op == OpType::MUL  ? left * right :
-                  binary_exp.op == OpType::DIV  ? left / right :
-                  binary_exp.op == OpType::MOD  ? left % right :
-                  binary_exp.op == OpType::LT   ? left < right :
-                  binary_exp.op == OpType::GT   ? left > right :
-                  binary_exp.op == OpType::LE   ? left <= right :
-                  binary_exp.op == OpType::GE   ? left >= right :
-                  binary_exp.op == OpType::EQ   ? left == right :
-                  binary_exp.op == OpType::NE   ? left != right :
-                  binary_exp.op == OpType::AND  ? left && right :
-                  binary_exp.op == OpType::OR   ? left || right :
-                                                  0;
+
+    if (in_const_exp_) {
+        last_value_ = binary_exp.op == OpType::PLUS ? left + right :
+                      binary_exp.op == OpType::MINU ? left - right :
+                      binary_exp.op == OpType::MUL  ? left * right :
+                      binary_exp.op == OpType::DIV  ? left / right :
+                      binary_exp.op == OpType::MOD  ? left % right :
+                      binary_exp.op == OpType::LT   ? (left < right) :
+                      binary_exp.op == OpType::GT   ? (left > right) :
+                      binary_exp.op == OpType::LE   ? (left <= right) :
+                      binary_exp.op == OpType::GE   ? (left >= right) :
+                      binary_exp.op == OpType::EQ   ? (left == right) :
+                      binary_exp.op == OpType::NE   ? (left != right) :
+                      binary_exp.op == OpType::AND  ? (left && right) :
+                      binary_exp.op == OpType::OR   ? (left || right) :
+                                                      0;
+    }
 }
 
 void SemanticAnalyzer::VisitUnaryExp(UnaryExp& unary_exp) {
@@ -425,9 +428,11 @@ void SemanticAnalyzer::VisitUnaryExp(UnaryExp& unary_exp) {
         unary_exp.operand->Accept(*this);
     }
     current_exp_is_array_ = false;
-    last_value_ = unary_exp.op == OpType::NOT  ? !last_value_ :
-                  unary_exp.op == OpType::MINU ? -last_value_ :
-                                                 last_value_;
+    if (in_const_exp_) {
+        last_value_ = unary_exp.op == OpType::NOT  ? !last_value_ :
+                      unary_exp.op == OpType::MINU ? -last_value_ :
+                                                     last_value_;
+    }
 }
 
 void SemanticAnalyzer::VisitFuncCall(FuncCall& func_call) {
@@ -476,7 +481,9 @@ void SemanticAnalyzer::VisitFuncRParams(FuncRParams& func_r_params) {
 
 void SemanticAnalyzer::VisitConstExp(ConstExp& const_exp) {
     if (const_exp.inner) {
+        in_const_exp_ = true;
         const_exp.inner->Accept(*this);
+        in_const_exp_ = false;
         const_exp.const_value = last_value_;
     }
 }

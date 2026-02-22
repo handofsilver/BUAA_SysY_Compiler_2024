@@ -15,6 +15,7 @@
 namespace ir {
 
     class BasicBlock; // forward declaration; full definition in BasicBlock.h
+    class IRPrintContext;
 
     /**
      * @brief Base class for all IR instructions.
@@ -31,8 +32,9 @@ namespace ir {
         BasicBlock* GetParent() const;
         void SetParent(BasicBlock* bb);
 
-        /** @brief Print this instruction to LLVM IR text (one line). */
-        virtual void Print(std::ostream& os) const = 0;
+        /** @brief Print this instruction to LLVM IR text (one line). \p context for print-time SSA
+         * names. */
+        virtual void Print(std::ostream& os, const IRPrintContext* context = nullptr) const = 0;
 
     protected:
         BasicBlock* parent_;
@@ -43,7 +45,7 @@ namespace ir {
     public:
         AllocaInst();
         AllocaInst(const std::string& name, Type* type, BasicBlock* parent);
-        void Print(std::ostream& os) const override;
+        void Print(std::ostream& os, const IRPrintContext* context = nullptr) const override;
     };
 
     /** @brief load: load from pointer. operand(0) = pointer. */
@@ -52,7 +54,7 @@ namespace ir {
         LoadInst();
         LoadInst(const std::string& name, Type* type, BasicBlock* parent, Value* ptr);
         Value* GetPointerOperand() const;
-        void Print(std::ostream& os) const override;
+        void Print(std::ostream& os, const IRPrintContext* context = nullptr) const override;
     };
 
     /** @brief store: store to pointer. operand(0)=value, operand(1)=pointer. */
@@ -63,7 +65,7 @@ namespace ir {
                   Value* ptr);
         Value* GetValueOperand() const;
         Value* GetPointerOperand() const;
-        void Print(std::ostream& os) const override;
+        void Print(std::ostream& os, const IRPrintContext* context = nullptr) const override;
     };
 
     /** @brief IR-level binary arithmetic op (decoupled from AST OpType). */
@@ -78,7 +80,7 @@ namespace ir {
         BinaryOp GetOp() const;
         Value* GetLhs() const;
         Value* GetRhs() const;
-        void Print(std::ostream& os) const override;
+        void Print(std::ostream& os, const IRPrintContext* context = nullptr) const override;
 
     private:
         BinaryOp op_;
@@ -99,7 +101,7 @@ namespace ir {
         Value* GetCond() const;
         BasicBlock* GetIfTrue() const;
         BasicBlock* GetIfFalse() const;
-        void Print(std::ostream& os) const override;
+        void Print(std::ostream& os, const IRPrintContext* context = nullptr) const override;
 
     private:
         bool is_conditional_;
@@ -114,7 +116,7 @@ namespace ir {
         Value* GetCallee() const;
         Value* GetArg(int i) const;
         size_t GetNumArgs() const;
-        void Print(std::ostream& os) const override;
+        void Print(std::ostream& os, const IRPrintContext* context = nullptr) const override;
     };
 
     /** @brief ret: return from function. operand(0) = return value (or none for ret void). */
@@ -124,7 +126,7 @@ namespace ir {
         ReturnInst(const std::string& name, Type* type, BasicBlock* parent, Value* ret_val);
         ReturnInst(const std::string& name, Type* type, BasicBlock* parent);
         Value* GetRetVal() const;
-        void Print(std::ostream& os) const override;
+        void Print(std::ostream& os, const IRPrintContext* context = nullptr) const override;
     };
 
     /** @brief getelementptr: address computation. operand(0)=base, operand(1..n)=indices. */
@@ -137,7 +139,7 @@ namespace ir {
                           Value* index0, Value* index1);
         Value* GetPointerOperand() const;
         Value* GetIndex(int i = 0) const;
-        void Print(std::ostream& os) const override;
+        void Print(std::ostream& os, const IRPrintContext* context = nullptr) const override;
     };
 
     /** @brief icmp: integer comparison. Result is i1. operand(0)=lhs, operand(1)=rhs. */
@@ -151,7 +153,7 @@ namespace ir {
         IcmpPred GetPredicate() const;
         Value* GetLhs() const;
         Value* GetRhs() const;
-        void Print(std::ostream& os) const override;
+        void Print(std::ostream& os, const IRPrintContext* context = nullptr) const override;
 
     private:
         IcmpPred pred_;
@@ -163,7 +165,7 @@ namespace ir {
         ZextInst();
         ZextInst(const std::string& name, Type* dest_type, BasicBlock* parent, Value* value);
         Value* GetOperandValue() const;
-        void Print(std::ostream& os) const override;
+        void Print(std::ostream& os, const IRPrintContext* context = nullptr) const override;
     };
 
     /** @brief trunc: truncate (e.g. i32 to i8). operand(0)=value. */
@@ -172,7 +174,7 @@ namespace ir {
         TruncInst();
         TruncInst(const std::string& name, Type* dest_type, BasicBlock* parent, Value* value);
         Value* GetOperandValue() const;
-        void Print(std::ostream& os) const override;
+        void Print(std::ostream& os, const IRPrintContext* context = nullptr) const override;
     };
 
 } // namespace ir

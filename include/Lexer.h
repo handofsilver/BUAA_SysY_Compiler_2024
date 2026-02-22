@@ -10,6 +10,9 @@
 /**
  * Lexer: reads source, advances via Next(), sets current token.
  * Errors are recorded as (line number, error code) in GetErrorLog().
+ *
+ * String/char constants: per SysY, the only escape is \\n (newline). GetStringConst
+ * and GetCharConst store the decoded value (e.g. one '\n' byte, not backslash+n).
  */
 class Lexer {
 public:

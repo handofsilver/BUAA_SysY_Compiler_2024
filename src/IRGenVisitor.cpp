@@ -199,7 +199,7 @@ ir::Instruction* IRGenVisitor::CreateEntryBlockAlloca(ir::Type* type) {
     std::string name = builder_->GetNextSSAName();
     auto inst = std::make_unique<ir::AllocaInst>(name, ptr_type, entry);
     ir::Instruction* result = inst.get();
-    entry->AddInstruction(std::move(inst));
+    entry->AddInstructionAtFront(std::move(inst));
     return result;
 }
 

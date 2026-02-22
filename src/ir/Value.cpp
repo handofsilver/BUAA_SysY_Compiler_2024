@@ -4,12 +4,33 @@
  */
 
 #include "ir/Value.h"
+#include "ir/BasicBlock.h"
+#include "ir/IRPrintContext.h"
 #include "ir/Use.h"
 #include <ostream>
 
 namespace ir {
 
-    void Value::PrintAsOperand(std::ostream& os) const {
+    void Value::PrintAsOperand(std::ostream& os, const IRPrintContext* context) const {
+        if (context) {
+            const BasicBlock* bb = dynamic_cast<const BasicBlock*>(this);
+            if (bb) {
+                std::string label;
+                if (context->GetBlockLabel(bb, label)) {
+                    os << "label %" << label;
+                    return;
+                }
+            }
+            std::string s;
+            if (context->GetSSAName(this, s)) {
+                os << "%" << s;
+                return;
+            }
+        }
+        DefaultPrintAsOperand(os);
+    }
+
+    void Value::DefaultPrintAsOperand(std::ostream& os) const {
         os << "%" << (name_.empty() ? "0" : name_);
     }
 

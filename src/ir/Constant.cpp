@@ -8,7 +8,7 @@
 
 namespace ir {
 
-    void ConstantInt::PrintAsOperand(std::ostream& os) const {
+    void ConstantInt::DefaultPrintAsOperand(std::ostream& os) const {
         if (type_) {
             type_->Print(os);
             os << " " << value_;

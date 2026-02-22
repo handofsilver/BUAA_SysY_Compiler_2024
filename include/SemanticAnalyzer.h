@@ -98,6 +98,9 @@ private:
     /** True when visiting LVal as left-hand side of assignment (then check const -> h). */
     bool lval_is_left_of_assign_ = false;
 
+    /** True while visiting the inner of a ConstExp (only then do we fold and write last_value_). */
+    bool in_const_exp_ = false;
+
     /** Last value calculated in constant folding. */
     int last_value_ = 0;
 

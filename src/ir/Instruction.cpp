@@ -5,12 +5,24 @@
 #include "ir/Instruction.h"
 #include "ir/BasicBlock.h"
 #include "ir/Constant.h"
+#include "ir/IRPrintContext.h"
 #include "ir/Type.h"
 #include <ostream>
 
 namespace ir {
 
     namespace {
+        std::string InstPrintName(const Instruction* inst, const IRPrintContext* context) {
+            if (!context) {
+                return inst->GetName().empty() ? "0" : inst->GetName();
+            }
+            std::string name;
+            if (context->GetSSAName(inst, name)) {
+                return name;
+            }
+            return inst->GetName().empty() ? "0" : inst->GetName();
+        }
+
         const char* BinaryOpToMnemonic(BinaryOp op) {
             switch (op) {
                 case BinaryOp::ADD: return "add";
@@ -62,8 +74,8 @@ namespace ir {
     AllocaInst::AllocaInst(const std::string& name, Type* type, BasicBlock* parent) :
     Instruction(name, type, parent) {}
 
-    void AllocaInst::Print(std::ostream& os) const {
-        os << "  %" << GetName() << " = alloca ";
+    void AllocaInst::Print(std::ostream& os, const IRPrintContext* context) const {
+        os << "  %" << InstPrintName(this, context) << " = alloca ";
         if (type_) {
             PointerType* pt = dynamic_cast<PointerType*>(type_);
             if (pt && pt->GetPointeeType()) {
@@ -90,14 +102,14 @@ namespace ir {
         return GetOperand(0);
     }
 
-    void LoadInst::Print(std::ostream& os) const {
-        os << "  %" << GetName() << " = load ";
+    void LoadInst::Print(std::ostream& os, const IRPrintContext* context) const {
+        os << "  %" << InstPrintName(this, context) << " = load ";
         if (type_) {
             type_->Print(os);
         }
         os << ", ptr ";
         if (Value* ptr = GetPointerOperand()) {
-            ptr->PrintAsOperand(os);
+            ptr->PrintAsOperand(os, context);
         }
         os << ", align 4";
     }
@@ -123,7 +135,7 @@ namespace ir {
         return GetOperand(1);
     }
 
-    void StoreInst::Print(std::ostream& os) const {
+    void StoreInst::Print(std::ostream& os, const IRPrintContext* context) const {
         Value* val = GetValueOperand();
         Value* ptr = GetPointerOperand();
         os << "  store ";
@@ -135,12 +147,12 @@ namespace ir {
             if (ConstantInt* c = dynamic_cast<ConstantInt*>(val)) {
                 os << c->GetValue();
             } else {
-                val->PrintAsOperand(os);
+                val->PrintAsOperand(os, context);
             }
         }
         os << ", ptr ";
         if (ptr) {
-            ptr->PrintAsOperand(os);
+            ptr->PrintAsOperand(os, context);
         }
         os << ", align 4";
     }
@@ -171,11 +183,11 @@ namespace ir {
         return GetOperand(1);
     }
 
-    void BinaryInst::Print(std::ostream& os) const {
+    void BinaryInst::Print(std::ostream& os, const IRPrintContext* context) const {
         Value* lhs = GetLhs();
         Value* rhs = GetRhs();
         const char* mnemonic = BinaryOpToMnemonic(op_);
-        os << "  %" << GetName() << " = " << mnemonic;
+        os << "  %" << InstPrintName(this, context) << " = " << mnemonic;
         if (BinaryOpHasNsw(op_)) {
             os << " nsw ";
         } else {
@@ -189,7 +201,7 @@ namespace ir {
             if (ConstantInt* c = dynamic_cast<ConstantInt*>(lhs)) {
                 os << c->GetValue();
             } else {
-                lhs->PrintAsOperand(os);
+                lhs->PrintAsOperand(os, context);
             }
         }
         os << ", ";
@@ -197,7 +209,7 @@ namespace ir {
             if (ConstantInt* c = dynamic_cast<ConstantInt*>(rhs)) {
                 os << c->GetValue();
             } else {
-                rhs->PrintAsOperand(os);
+                rhs->PrintAsOperand(os, context);
             }
         }
     }
@@ -241,25 +253,40 @@ namespace ir {
         return is_conditional_ ? static_cast<BasicBlock*>(GetOperand(2)) : nullptr;
     }
 
-    void BranchInst::Print(std::ostream& os) const {
+    void BranchInst::Print(std::ostream& os, const IRPrintContext* context) const {
         os << "  br ";
         if (is_conditional_) {
             os << "i1 ";
             if (Value* cond = GetCond()) {
-                cond->PrintAsOperand(os);
+                cond->PrintAsOperand(os, context);
             }
             os << ", ";
             if (BasicBlock* t = GetIfTrue()) {
-                os << "label %" << t->GetName();
+                std::string label;
+                if (context && context->GetBlockLabel(t, label)) {
+                    os << "label %" << label;
+                } else {
+                    os << "label %" << t->GetName();
+                }
             }
             os << ", ";
             if (BasicBlock* f = GetIfFalse()) {
-                os << "label %" << f->GetName();
+                std::string label;
+                if (context && context->GetBlockLabel(f, label)) {
+                    os << "label %" << label;
+                } else {
+                    os << "label %" << f->GetName();
+                }
             }
         } else {
             os << "label ";
             if (BasicBlock* dest = GetDest()) {
-                os << "%" << dest->GetName();
+                std::string label;
+                if (context && context->GetBlockLabel(dest, label)) {
+                    os << "%" << label;
+                } else {
+                    os << "%" << dest->GetName();
+                }
             }
         }
     }
@@ -291,11 +318,11 @@ namespace ir {
         return GetNumOperands() > 0 ? static_cast<size_t>(GetNumOperands()) - 1 : 0;
     }
 
-    void CallInst::Print(std::ostream& os) const {
+    void CallInst::Print(std::ostream& os, const IRPrintContext* context) const {
         Type* ty = GetType();
         bool is_void = ty && ty->GetTypeId() == TypeID::VOID_TY_ID;
         if (!is_void) {
-            os << "  %" << GetName() << " = ";
+            os << "  %" << InstPrintName(this, context) << " = ";
         } else {
             os << "  ";
         }
@@ -305,7 +332,7 @@ namespace ir {
         }
         os << " ";
         if (Value* callee = GetCallee()) {
-            callee->PrintAsOperand(os);
+            callee->PrintAsOperand(os, context);
         }
         os << "(";
         for (size_t i = 0; i < GetNumArgs(); ++i) {
@@ -321,7 +348,7 @@ namespace ir {
                 if (ConstantInt* c = dynamic_cast<ConstantInt*>(arg)) {
                     os << c->GetValue();
                 } else {
-                    arg->PrintAsOperand(os);
+                    arg->PrintAsOperand(os, context);
                 }
             }
         }
@@ -347,7 +374,7 @@ namespace ir {
         return GetNumOperands() > 0 ? GetOperand(0) : nullptr;
     }
 
-    void ReturnInst::Print(std::ostream& os) const {
+    void ReturnInst::Print(std::ostream& os, const IRPrintContext* context) const {
         os << "  ret ";
         Value* ret_val = GetRetVal();
         if (ret_val && ret_val->GetType()) {
@@ -356,7 +383,7 @@ namespace ir {
             if (ConstantInt* c = dynamic_cast<ConstantInt*>(ret_val)) {
                 os << c->GetValue();
             } else {
-                ret_val->PrintAsOperand(os);
+                ret_val->PrintAsOperand(os, context);
             }
         } else {
             os << "void";
@@ -394,7 +421,7 @@ namespace ir {
         return GetNumOperands() > 1u + idx ? GetOperand(1 + i) : nullptr;
     }
 
-    void GetElementPtrInst::Print(std::ostream& os) const {
+    void GetElementPtrInst::Print(std::ostream& os, const IRPrintContext* context) const {
         Value* base = GetPointerOperand();
         if (!base || !base->GetType()) {
             return;
@@ -402,14 +429,14 @@ namespace ir {
         Type* base_ty = base->GetType();
         PointerType* ptr_ty = base_ty ? dynamic_cast<PointerType*>(base_ty) : nullptr;
         Type* pointee = ptr_ty ? ptr_ty->GetPointeeType() : nullptr;
-        os << "  %" << GetName() << " = getelementptr inbounds ";
+        os << "  %" << InstPrintName(this, context) << " = getelementptr inbounds ";
         if (pointee) {
             pointee->Print(os);
         } else {
             os << "i32";
         }
         os << ", ptr ";
-        base->PrintAsOperand(os);
+        base->PrintAsOperand(os, context);
         Value* idx0 = GetIndex(0);
         Value* idx1 = GetIndex(1);
         if (idx0) {
@@ -417,7 +444,7 @@ namespace ir {
             if (ConstantInt* c = dynamic_cast<ConstantInt*>(idx0)) {
                 os << c->GetValue();
             } else {
-                idx0->PrintAsOperand(os);
+                idx0->PrintAsOperand(os, context);
             }
         }
         if (idx1) {
@@ -425,7 +452,7 @@ namespace ir {
             if (ConstantInt* c = dynamic_cast<ConstantInt*>(idx1)) {
                 os << c->GetValue();
             } else {
-                idx1->PrintAsOperand(os);
+                idx1->PrintAsOperand(os, context);
             }
         }
     }
@@ -456,17 +483,18 @@ namespace ir {
         return GetOperand(1);
     }
 
-    void IcmpInst::Print(std::ostream& os) const {
+    void IcmpInst::Print(std::ostream& os, const IRPrintContext* context) const {
         Value* lhs = GetLhs();
         Value* rhs = GetRhs();
-        os << "  %" << GetName() << " = icmp " << IcmpPredToMnemonic(pred_) << " ";
+        os << "  %" << InstPrintName(this, context) << " = icmp " << IcmpPredToMnemonic(pred_)
+           << " ";
         if (lhs && lhs->GetType()) {
             lhs->GetType()->Print(os);
             os << " ";
             if (ConstantInt* c = dynamic_cast<ConstantInt*>(lhs)) {
                 os << c->GetValue();
             } else {
-                lhs->PrintAsOperand(os);
+                lhs->PrintAsOperand(os, context);
             }
         }
         os << ", ";
@@ -474,7 +502,7 @@ namespace ir {
             if (ConstantInt* c = dynamic_cast<ConstantInt*>(rhs)) {
                 os << c->GetValue();
             } else {
-                rhs->PrintAsOperand(os);
+                rhs->PrintAsOperand(os, context);
             }
         }
     }
@@ -494,9 +522,9 @@ namespace ir {
         return GetOperand(0);
     }
 
-    void ZextInst::Print(std::ostream& os) const {
+    void ZextInst::Print(std::ostream& os, const IRPrintContext* context) const {
         Value* op = GetOperandValue();
-        os << "  %" << GetName() << " = zext ";
+        os << "  %" << InstPrintName(this, context) << " = zext ";
         if (op && op->GetType()) {
             op->GetType()->Print(os);
         } else {
@@ -507,7 +535,7 @@ namespace ir {
             if (ConstantInt* c = dynamic_cast<ConstantInt*>(op)) {
                 os << c->GetValue();
             } else {
-                op->PrintAsOperand(os);
+                op->PrintAsOperand(os, context);
             }
         }
         os << " to ";
@@ -534,9 +562,9 @@ namespace ir {
         return GetOperand(0);
     }
 
-    void TruncInst::Print(std::ostream& os) const {
+    void TruncInst::Print(std::ostream& os, const IRPrintContext* context) const {
         Value* op = GetOperandValue();
-        os << "  %" << GetName() << " = trunc ";
+        os << "  %" << InstPrintName(this, context) << " = trunc ";
         if (op && op->GetType()) {
             op->GetType()->Print(os);
         } else {
@@ -547,7 +575,7 @@ namespace ir {
             if (ConstantInt* c = dynamic_cast<ConstantInt*>(op)) {
                 os << c->GetValue();
             } else {
-                op->PrintAsOperand(os);
+                op->PrintAsOperand(os, context);
             }
         }
         os << " to ";

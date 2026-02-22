@@ -15,6 +15,8 @@
 
 namespace ir {
 
+    class IRPrintContext;
+
     /**
      * @brief A basic block: linear sequence of instructions, single entry, single exit.
      *
@@ -38,8 +40,8 @@ namespace ir {
         /** @brief Insert instruction at the front of this block (e.g. for allocas in entry). */
         void AddInstructionAtFront(std::unique_ptr<Instruction> inst);
 
-        void PrintAsOperand(std::ostream& os) const override;
-        void Print(std::ostream& os) const;
+        void DefaultPrintAsOperand(std::ostream& os) const override;
+        void Print(std::ostream& os, const IRPrintContext* context = nullptr) const;
 
     private:
         std::list<std::unique_ptr<Instruction>> instructions_;
