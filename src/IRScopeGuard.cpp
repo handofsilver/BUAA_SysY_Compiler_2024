@@ -1,11 +1,10 @@
-
 #include "IRScopeGuard.h"
-#include "IRGenVisitor.h"
+#include "IRGenContext.h"
 
-IRScopeGuard::IRScopeGuard(IRGenVisitor& visitor) : visitor_(&visitor) {
-    visitor_->PushScope();
+IRScopeGuard::IRScopeGuard(IRGenContext& ctx) : ctx_(&ctx) {
+    ctx_->PushScope();
 }
 
 IRScopeGuard::~IRScopeGuard() {
-    visitor_->PopScope();
+    ctx_->PopScope();
 }

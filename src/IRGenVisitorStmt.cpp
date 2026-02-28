@@ -12,7 +12,7 @@
 // -----------------------------------------------------------------------------
 
 void IRGenVisitor::VisitBlock(Block& block) {
-    IRScopeGuard scope_guard(*this);
+    IRScopeGuard scope_guard(ctx_);
     for (auto& item : block.block_items) {
         item->Accept(*this);
     }
@@ -32,12 +32,12 @@ void IRGenVisitor::VisitAssignStmt(AssignStmt& assign_stmt) {
     assign_stmt.exp->Accept(*this);
     ir::Value* val = temp_value_;
 
-    assert(addr != nullptr && val != nullptr && builder_->GetInsertBlock() != nullptr);
+    assert(addr != nullptr && val != nullptr && ctx_.builder->GetInsertBlock() != nullptr);
     ir::Type* target_ty = GetPointeeType(addr);
 
     assert(target_ty != nullptr);
     val = ConvertToTargetType(val, target_ty);
-    builder_->CreateStore(val, addr);
+    ctx_.builder->CreateStore(val, addr);
 }
 
 void IRGenVisitor::VisitExpStmt(ExpStmt& exp_stmt) {
@@ -55,30 +55,30 @@ void IRGenVisitor::VisitIfStmt(IfStmt& if_stmt) {
 
     if_stmt.cond->Accept(*this);
     ir::Value* cond_i1 = CoerceToI1(temp_value_);
-    if (!cond_i1 || !builder_->GetInsertBlock()) {
+    if (!cond_i1 || !ctx_.builder->GetInsertBlock()) {
         return;
     }
-    builder_->CreateCondBr(cond_i1, true_block, false_block);
+    ctx_.builder->CreateCondBr(cond_i1, true_block, false_block);
 
-    builder_->SetInsertPoint(true_block);
+    ctx_.builder->SetInsertPoint(true_block);
     if_stmt.then_stmt->Accept(*this);
     if (!IsBlockTerminated()) {
-        builder_->CreateBr(next_block);
+        ctx_.builder->CreateBr(next_block);
     }
 
     if (if_stmt.else_stmt.has_value() && if_stmt.else_stmt->get()) {
-        builder_->SetInsertPoint(false_block);
+        ctx_.builder->SetInsertPoint(false_block);
         (*if_stmt.else_stmt)->Accept(*this);
         if (!IsBlockTerminated()) {
-            builder_->CreateBr(next_block);
+            ctx_.builder->CreateBr(next_block);
         }
     }
 
-    builder_->SetInsertPoint(next_block);
+    ctx_.builder->SetInsertPoint(next_block);
 }
 
 void IRGenVisitor::VisitForStmt(ForStmt& for_stmt) {
-    IRScopeGuard scope_guard(*this);
+    IRScopeGuard scope_guard(ctx_);
 
     if (for_stmt.init.has_value() && for_stmt.init->get()) {
         (*for_stmt.init)->Accept(*this);
@@ -90,41 +90,41 @@ void IRGenVisitor::VisitForStmt(ForStmt& for_stmt) {
     ir::BasicBlock* after_block = CreateBasicBlock("for.after");
 
     if (!IsBlockTerminated()) {
-        builder_->CreateBr(cond_block);
+        ctx_.builder->CreateBr(cond_block);
     }
 
-    builder_->SetInsertPoint(cond_block);
+    ctx_.builder->SetInsertPoint(cond_block);
     if (for_stmt.cond.has_value() && for_stmt.cond->get()) {
         (*for_stmt.cond)->Accept(*this);
         ir::Value* cond_val = temp_value_;
-        if (cond_val && builder_->GetInsertBlock()) {
+        if (cond_val && ctx_.builder->GetInsertBlock()) {
             ir::Value* cond_i1 = CoerceToI1(cond_val);
-            builder_->CreateCondBr(cond_i1, body_block, after_block);
+            ctx_.builder->CreateCondBr(cond_i1, body_block, after_block);
         } else {
-            builder_->CreateBr(body_block);
+            ctx_.builder->CreateBr(body_block);
         }
     } else {
-        builder_->CreateBr(body_block);
+        ctx_.builder->CreateBr(body_block);
     }
 
     break_targets_.push_back(after_block);
     continue_targets_.push_back(step_block);
 
-    builder_->SetInsertPoint(body_block);
+    ctx_.builder->SetInsertPoint(body_block);
     for_stmt.body->Accept(*this);
     if (!IsBlockTerminated()) {
-        builder_->CreateBr(step_block);
+        ctx_.builder->CreateBr(step_block);
     }
 
-    builder_->SetInsertPoint(step_block);
+    ctx_.builder->SetInsertPoint(step_block);
     if (for_stmt.step.has_value() && for_stmt.step->get()) {
         (*for_stmt.step)->Accept(*this);
     }
-    builder_->CreateBr(cond_block);
+    ctx_.builder->CreateBr(cond_block);
 
     break_targets_.pop_back();
     continue_targets_.pop_back();
-    builder_->SetInsertPoint(after_block);
+    ctx_.builder->SetInsertPoint(after_block);
 }
 
 void IRGenVisitor::VisitForInitOrStep(ForInitOrStep& for_init_or_step) {
@@ -138,26 +138,26 @@ void IRGenVisitor::VisitForInitOrStep(ForInitOrStep& for_init_or_step) {
         for_init_or_step.exp->Accept(*this);
     }
     ir::Value* val = temp_value_;
-    if (addr && val && builder_->GetInsertBlock()) {
+    if (addr && val && ctx_.builder->GetInsertBlock()) {
         ir::Type* target_ty = GetPointeeType(addr);
         if (target_ty) {
             val = ConvertToTargetType(val, target_ty);
         }
-        builder_->CreateStore(val, addr);
+        ctx_.builder->CreateStore(val, addr);
     }
 }
 
 void IRGenVisitor::VisitBreakStmt(BreakStmt& break_stmt) {
     (void)break_stmt;
     if (!break_targets_.empty()) {
-        builder_->CreateBr(break_targets_.back());
+        ctx_.builder->CreateBr(break_targets_.back());
     }
 }
 
 void IRGenVisitor::VisitContinueStmt(ContinueStmt& continue_stmt) {
     (void)continue_stmt;
     if (!continue_targets_.empty()) {
-        builder_->CreateBr(continue_targets_.back());
+        ctx_.builder->CreateBr(continue_targets_.back());
     }
 }
 
@@ -165,18 +165,18 @@ void IRGenVisitor::VisitReturnStmt(ReturnStmt& return_stmt) {
     if (return_stmt.exp.has_value() && *return_stmt.exp) {
         (*return_stmt.exp)->Accept(*this);
         ir::Value* val = temp_value_;
-        if (val && builder_->GetInsertBlock() && current_function_) {
-            ir::Type* ft = current_function_->GetType();
+        if (val && ctx_.builder->GetInsertBlock() && ctx_.current_function) {
+            ir::Type* ft = ctx_.current_function->GetType();
             if (auto* fty = dynamic_cast<ir::FunctionType*>(ft)) {
                 ir::Type* ret_ty = fty->GetReturnType();
-                if (ret_ty && ret_ty != types_.GetVoidType()) {
+                if (ret_ty && ret_ty != ctx_.types.GetVoidType()) {
                     val = ConvertToTargetType(val, ret_ty);
                 }
             }
-            builder_->CreateRet(val);
+            ctx_.builder->CreateRet(val);
         }
     } else {
-        builder_->CreateRetVoid();
+        ctx_.builder->CreateRetVoid();
     }
 }
 
@@ -186,11 +186,11 @@ void IRGenVisitor::VisitGetintStmt(GetintStmt& getint_stmt) {
     is_lval_mode_ = false;
     ir::Value* addr = temp_value_;
     ir::Instruction* call =
-        builder_->CreateCall(types_.GetI32Type(), module_->GetFunction("getint"), {});
-    if (addr && call && builder_->GetInsertBlock()) {
+        ctx_.builder->CreateCall(ctx_.types.GetI32Type(), ctx_.module->GetFunction("getint"), {});
+    if (addr && call && ctx_.builder->GetInsertBlock()) {
         ir::Type* target_ty = GetPointeeType(addr);
         ir::Value* to_store = target_ty ? ConvertToTargetType(call, target_ty) : call;
-        builder_->CreateStore(to_store, addr);
+        ctx_.builder->CreateStore(to_store, addr);
     }
 }
 
@@ -200,16 +200,16 @@ void IRGenVisitor::VisitGetcharStmt(GetcharStmt& getchar_stmt) {
     is_lval_mode_ = false;
     ir::Value* addr = temp_value_;
     ir::Instruction* call =
-        builder_->CreateCall(types_.GetI32Type(), module_->GetFunction("getchar"), {});
-    if (addr && call && builder_->GetInsertBlock()) {
+        ctx_.builder->CreateCall(ctx_.types.GetI32Type(), ctx_.module->GetFunction("getchar"), {});
+    if (addr && call && ctx_.builder->GetInsertBlock()) {
         ir::Type* target_ty = GetPointeeType(addr);
         ir::Value* to_store = target_ty ? ConvertToTargetType(call, target_ty) : call;
-        builder_->CreateStore(to_store, addr);
+        ctx_.builder->CreateStore(to_store, addr);
     }
 }
 
 void IRGenVisitor::VisitPrintfStmt(PrintfStmt& printf_stmt) {
-    if (!builder_->GetInsertBlock()) {
+    if (!ctx_.builder->GetInsertBlock()) {
         return;
     }
     const std::string& fmt = printf_stmt.format_string;
@@ -221,9 +221,9 @@ void IRGenVisitor::VisitPrintfStmt(PrintfStmt& printf_stmt) {
             if (!literal.empty()) {
                 ir::Value* str_ptr = EmitGlobalStringLiteral(literal);
                 if (str_ptr) {
-                    ir::Function* putstr_fn = module_->GetFunction("putstr");
+                    ir::Function* putstr_fn = ctx_.module->GetFunction("putstr");
                     if (putstr_fn) {
-                        builder_->CreateCall(types_.GetVoidType(), putstr_fn, {str_ptr});
+                        ctx_.builder->CreateCall(ctx_.types.GetVoidType(), putstr_fn, {str_ptr});
                     }
                 }
                 literal.clear();
@@ -233,9 +233,9 @@ void IRGenVisitor::VisitPrintfStmt(PrintfStmt& printf_stmt) {
                     printf_stmt.exp_list[exp_idx]->Accept(*this);
                     ir::Value* val = PromoteToI32(temp_value_);
                     if (val) {
-                        ir::Function* putint_fn = module_->GetFunction("putint");
+                        ir::Function* putint_fn = ctx_.module->GetFunction("putint");
                         if (putint_fn) {
-                            builder_->CreateCall(types_.GetVoidType(), putint_fn, {val});
+                            ctx_.builder->CreateCall(ctx_.types.GetVoidType(), putint_fn, {val});
                         }
                     }
                     ++exp_idx;
@@ -246,9 +246,9 @@ void IRGenVisitor::VisitPrintfStmt(PrintfStmt& printf_stmt) {
                     printf_stmt.exp_list[exp_idx]->Accept(*this);
                     ir::Value* val = PromoteToI32(temp_value_);
                     if (val) {
-                        ir::Function* putch_fn = module_->GetFunction("putch");
+                        ir::Function* putch_fn = ctx_.module->GetFunction("putch");
                         if (putch_fn) {
-                            builder_->CreateCall(types_.GetVoidType(), putch_fn, {val});
+                            ctx_.builder->CreateCall(ctx_.types.GetVoidType(), putch_fn, {val});
                         }
                     }
                     ++exp_idx;
@@ -265,9 +265,9 @@ void IRGenVisitor::VisitPrintfStmt(PrintfStmt& printf_stmt) {
     if (!literal.empty()) {
         ir::Value* str_ptr = EmitGlobalStringLiteral(literal);
         if (str_ptr) {
-            ir::Function* putstr_fn = module_->GetFunction("putstr");
+            ir::Function* putstr_fn = ctx_.module->GetFunction("putstr");
             if (putstr_fn) {
-                builder_->CreateCall(types_.GetVoidType(), putstr_fn, {str_ptr});
+                ctx_.builder->CreateCall(ctx_.types.GetVoidType(), putstr_fn, {str_ptr});
             }
         }
     }

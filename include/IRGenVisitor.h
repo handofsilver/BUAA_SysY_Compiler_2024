@@ -3,18 +3,17 @@
  * @brief AST visitor that generates in-memory LLVM IR (Module / Function / BasicBlock /
  * Instruction).
  *
- * Uses IRBuilder to create instructions and maintains scope and mode flags for
- * declarations, left-value vs value use, and control-flow targets.
+ * Uses IRBuilder to create instructions and maintains traversal-specific mode flags.
+ * Environment state (resource pointers, symbol table) lives in IRGenContext.
  */
 #pragma once
 
 #include "AST.h"
 #include "ASTVisitor.h"
-#include "IRBuilder.h"
+#include "IRGenContext.h"
 #include "ir/Function.h"
 #include "ir/Module.h"
 #include "ir/TypeManager.h"
-#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -62,20 +61,24 @@ public:
     void VisitConstInitVal(ConstInitVal& const_init_val) override;
     void VisitInitVal(InitVal& init_val) override;
 
-    /** @brief Push a new scope (e.g. on entering a block). */
-    void PushScope();
-
-    /** @brief Pop the current scope (e.g. on leaving a block). */
-    void PopScope();
-
 private:
     // -------------------------------------------------------------------------
-    // Core components
+    // Owned resources (lifetime managed by IRGenVisitor)
     // -------------------------------------------------------------------------
 
     std::unique_ptr<ir::Module> module_;
     std::unique_ptr<ir::IRBuilder> builder_;
     ir::TypeManager& types_ = ir::TypeManager::Get();
+
+    // -------------------------------------------------------------------------
+    // IR generation context (non-owning pointers into resources above + scope)
+    // -------------------------------------------------------------------------
+
+    IRGenContext ctx_;
+
+    // -------------------------------------------------------------------------
+    // Traversal state (MUST stay in IRGenVisitor, not in Context)
+    // -------------------------------------------------------------------------
 
     /**
      * @brief Last computed value from the most recent expression/operand visit.
@@ -103,12 +106,6 @@ private:
     bool is_global_ = false;
 
     /**
-     * @brief The function currently being generated. Used when creating new basic
-     * blocks and setting the builder insertion point.
-     */
-    ir::Function* current_function_ = nullptr;
-
-    /**
      * @brief Stack of basic blocks for break targets (innermost loop end). Push on
      * entering a loop, pop on exit; break generates br to top of stack.
      */
@@ -120,31 +117,26 @@ private:
      */
     std::vector<ir::BasicBlock*> continue_targets_;
 
-    // -------------------------------------------------------------------------
-    // Symbol table (scope chain)
-    // -------------------------------------------------------------------------
-
-    struct Scope {
-        int id;
-        std::map<std::string, ir::Value*> map;
-    };
-    std::vector<Scope> scopes_;
-    int next_scope_id_ = 1;
-    int current_scope_id_ = 0;
-
     /** BType of the current Decl (ConstDecl/VarDecl) for VisitConstDef/VisitVarDef. */
     BType current_decl_btype_ = BType::INT;
 
-    /** @brief Look up a variable by name in the scope chain (inner to outer). */
-    ir::Value* LookupVariable(const std::string& name) const;
+    /**
+     * @brief Arguments for the current function call (filled by VisitFuncRParams, used by
+     * VisitFuncCall).
+     */
+    std::vector<ir::Value*> call_args_;
 
-    /** @brief Register a variable in the current scope. */
-    void RegisterVariable(const std::string& name, ir::Value* value);
+    /** Counter for unique .str.N names in printf string literals. */
+    int printf_str_counter_ = 0;
+
+    // -------------------------------------------------------------------------
+    // Helper methods
+    // -------------------------------------------------------------------------
 
     /**
-     * @brief Create a new BasicBlock, add it to current_function_, return raw pointer.
+     * @brief Create a new BasicBlock, add it to ctx_.current_function, return raw pointer.
      * Labels are unique per function: "entry" is kept as-is; others get "name.N" using
-     * builder_->GetNextSSAName() (reuses SSA counter, no extra block_counter).
+     * ctx_.builder->GetNextSSAName() (reuses SSA counter, no extra block_counter).
      */
     ir::BasicBlock* CreateBasicBlock(const std::string& name);
 
@@ -171,14 +163,7 @@ private:
      */
     void EmitShortCircuitOR(Exp* lhs, Exp* rhs);
 
-    /**
-     * @brief Create an alloca in the current function's entry block (at the front), then restore
-     * the previous insert point. Used for local variables and parameter copies.
-     * @param type Allocated type (e.g. i32); the instruction's result type will be pointer to it.
-     * @param name Optional name for the alloca result.
-     * @return The AllocaInst*, or nullptr if no current function or entry block.
-     */
-    /** @brief Create alloca in entry block; name is next SSA number from builder_. */
+    /** @brief Create alloca in entry block; name is next SSA number from ctx_.builder. */
     ir::Instruction* CreateEntryBlockAlloca(ir::Type* type);
 
     // -------------------------------------------------------------------------
@@ -227,13 +212,4 @@ private:
      * pointer Value* to pass to putstr. Uses printf_str_counter_ for unique names.
      */
     ir::Value* EmitGlobalStringLiteral(const std::string& str);
-
-    /** Counter for unique .str.N names in printf string literals. */
-    int printf_str_counter_ = 0;
-
-    /**
-     * @brief Arguments for the current function call (filled by VisitFuncRParams, used by
-     * VisitFuncCall).
-     */
-    std::vector<ir::Value*> call_args_;
 };

@@ -4,7 +4,6 @@
  */
 #include "AST.h"
 #include "IRGenVisitor.h"
-#include "IRScopeGuard.h"
 
 // -----------------------------------------------------------------------------
 // CompUnit and declarations (global vs local)

@@ -1,14 +1,14 @@
 #pragma once
 
-class IRGenVisitor;
+class IRGenContext;
 
 class IRScopeGuard {
 public:
-    explicit IRScopeGuard(IRGenVisitor& visitor);
+    explicit IRScopeGuard(IRGenContext& ctx);
     ~IRScopeGuard();
     IRScopeGuard(const IRScopeGuard&) = delete;
     IRScopeGuard& operator=(const IRScopeGuard&) = delete;
 
 private:
-    IRGenVisitor* visitor_;
+    IRGenContext* ctx_;
 };
