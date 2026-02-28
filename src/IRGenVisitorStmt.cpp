@@ -169,7 +169,7 @@ void IRGenVisitor::VisitReturnStmt(ReturnStmt& return_stmt) {
             ir::Type* ft = current_function_->GetType();
             if (auto* fty = dynamic_cast<ir::FunctionType*>(ft)) {
                 ir::Type* ret_ty = fty->GetReturnType();
-                if (ret_ty && ret_ty != module_->GetVoidType()) {
+                if (ret_ty && ret_ty != types_.GetVoidType()) {
                     val = ConvertToTargetType(val, ret_ty);
                 }
             }
@@ -186,7 +186,7 @@ void IRGenVisitor::VisitGetintStmt(GetintStmt& getint_stmt) {
     is_lval_mode_ = false;
     ir::Value* addr = temp_value_;
     ir::Instruction* call =
-        builder_->CreateCall(module_->GetI32Type(), module_->GetFunction("getint"), {});
+        builder_->CreateCall(types_.GetI32Type(), module_->GetFunction("getint"), {});
     if (addr && call && builder_->GetInsertBlock()) {
         ir::Type* target_ty = GetPointeeType(addr);
         ir::Value* to_store = target_ty ? ConvertToTargetType(call, target_ty) : call;
@@ -200,7 +200,7 @@ void IRGenVisitor::VisitGetcharStmt(GetcharStmt& getchar_stmt) {
     is_lval_mode_ = false;
     ir::Value* addr = temp_value_;
     ir::Instruction* call =
-        builder_->CreateCall(module_->GetI32Type(), module_->GetFunction("getchar"), {});
+        builder_->CreateCall(types_.GetI32Type(), module_->GetFunction("getchar"), {});
     if (addr && call && builder_->GetInsertBlock()) {
         ir::Type* target_ty = GetPointeeType(addr);
         ir::Value* to_store = target_ty ? ConvertToTargetType(call, target_ty) : call;
@@ -223,7 +223,7 @@ void IRGenVisitor::VisitPrintfStmt(PrintfStmt& printf_stmt) {
                 if (str_ptr) {
                     ir::Function* putstr_fn = module_->GetFunction("putstr");
                     if (putstr_fn) {
-                        builder_->CreateCall(module_->GetVoidType(), putstr_fn, {str_ptr});
+                        builder_->CreateCall(types_.GetVoidType(), putstr_fn, {str_ptr});
                     }
                 }
                 literal.clear();
@@ -235,7 +235,7 @@ void IRGenVisitor::VisitPrintfStmt(PrintfStmt& printf_stmt) {
                     if (val) {
                         ir::Function* putint_fn = module_->GetFunction("putint");
                         if (putint_fn) {
-                            builder_->CreateCall(module_->GetVoidType(), putint_fn, {val});
+                            builder_->CreateCall(types_.GetVoidType(), putint_fn, {val});
                         }
                     }
                     ++exp_idx;
@@ -248,7 +248,7 @@ void IRGenVisitor::VisitPrintfStmt(PrintfStmt& printf_stmt) {
                     if (val) {
                         ir::Function* putch_fn = module_->GetFunction("putch");
                         if (putch_fn) {
-                            builder_->CreateCall(module_->GetVoidType(), putch_fn, {val});
+                            builder_->CreateCall(types_.GetVoidType(), putch_fn, {val});
                         }
                     }
                     ++exp_idx;
@@ -267,7 +267,7 @@ void IRGenVisitor::VisitPrintfStmt(PrintfStmt& printf_stmt) {
         if (str_ptr) {
             ir::Function* putstr_fn = module_->GetFunction("putstr");
             if (putstr_fn) {
-                builder_->CreateCall(module_->GetVoidType(), putstr_fn, {str_ptr});
+                builder_->CreateCall(types_.GetVoidType(), putstr_fn, {str_ptr});
             }
         }
     }

@@ -9,8 +9,8 @@
 
 #include "ir/BasicBlock.h"
 #include "ir/Instruction.h"
-#include "ir/Module.h"
 #include "ir/Type.h"
+#include "ir/TypeManager.h"
 #include "irgen/SSANameAllocator.h"
 #include <cassert>
 #include <string>
@@ -40,12 +40,6 @@ namespace ir {
         /** @brief Get the current insertion block, or nullptr if none set. */
         BasicBlock* GetInsertBlock() const {
             return insert_point_;
-        }
-
-        /** @brief Set the module (for GetVoidType in CreateRetVoid). Call after SetInsertPoint when
-         * generating. */
-        void SetModule(Module* m) {
-            module_ = m;
         }
 
         /** @brief Reset SSA counter (call at function entry). Next GetNextSSAName() will return \p
@@ -145,12 +139,11 @@ namespace ir {
             return Create<ReturnInst>("", val->GetType(), bb, val);
         }
 
-        /** @brief Create return without value: ret void. Requires SetModule() to have been called.
-         */
+        /** @brief Create return without value: ret void. */
         Instruction* CreateRetVoid() {
             BasicBlock* bb = GetInsertBlock();
-            assert(bb != nullptr && module_ != nullptr);
-            return Create<ReturnInst>("", module_->GetVoidType(), bb);
+            assert(bb != nullptr);
+            return Create<ReturnInst>("", TypeManager::Get().GetVoidType(), bb);
         }
 
         // -------------------------------------------------------------------------
@@ -207,7 +200,6 @@ namespace ir {
 
     private:
         BasicBlock* insert_point_ = nullptr;
-        Module* module_ = nullptr;
         SSANameAllocator ssa_allocator_;
     };
 

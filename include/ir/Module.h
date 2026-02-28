@@ -3,9 +3,7 @@
  * @brief Module: top-level container for global variables, functions, and constants.
  *
  * The Module owns all GlobalVars, Functions, and Constants.
- * Type management has been extracted to TypeManager (Flyweight singleton);
- * the convenience type-getters here are thin delegations kept for backward
- * compatibility with existing callers (IRGenVisitor, IRBuilder, TypeMapping).
+ * Type management lives in TypeManager (see TypeManager.h).
  */
 #pragma once
 
@@ -48,19 +46,6 @@ namespace ir {
         const std::vector<std::unique_ptr<Function>>& GetFunctions() const {
             return functions_;
         }
-
-        // -- Type access (delegates to TypeManager) ------------------------------
-        // These thin wrappers exist so that callers (IRGenVisitor, IRBuilder, etc.)
-        // do not need to be updated in this commit.  A follow-up commit can migrate
-        // callers to TypeManager::Get() directly and remove these.
-
-        IntegerType* GetI32Type();
-        IntegerType* GetI8Type();
-        IntegerType* GetI1Type();
-        VoidType* GetVoidType();
-        LabelType* GetLabelType();
-        PointerType* GetPointerType(Type* pointee_type);
-        ArrayType* GetArrayType(Type* element_type, unsigned num_elements);
 
         // -- Constant pool -------------------------------------------------------
 

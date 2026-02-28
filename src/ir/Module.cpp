@@ -2,8 +2,7 @@
  * @file Module.cpp
  * @brief Module: constant pool, function/global management; out-of-line destructor.
  *
- * Type management has been extracted to TypeManager. The GetXxxType() methods
- * here are thin delegations for backward compatibility.
+ * Type management lives in TypeManager (see TypeManager.h/cpp).
  *
  * Lib I/O (getint, getchar, putint, putch, putstr): only declare on demand.
  * GetFunction(name) calls EnsureDeclaredLibFunction(name), which adds a declaration for
@@ -20,34 +19,6 @@ namespace ir {
     Module::~Module() = default;
 
     // =========================================================================
-    // Type access — thin delegations to TypeManager
-    // =========================================================================
-
-    IntegerType* Module::GetI32Type() {
-        return TypeManager::Get().GetI32Type();
-    }
-    IntegerType* Module::GetI8Type() {
-        return TypeManager::Get().GetI8Type();
-    }
-    IntegerType* Module::GetI1Type() {
-        return TypeManager::Get().GetI1Type();
-    }
-    VoidType* Module::GetVoidType() {
-        return TypeManager::Get().GetVoidType();
-    }
-    LabelType* Module::GetLabelType() {
-        return TypeManager::Get().GetLabelType();
-    }
-
-    PointerType* Module::GetPointerType(Type* pointee_type) {
-        return TypeManager::Get().GetPointerType(pointee_type);
-    }
-
-    ArrayType* Module::GetArrayType(Type* element_type, unsigned num_elements) {
-        return TypeManager::Get().GetArrayType(element_type, num_elements);
-    }
-
-    // =========================================================================
     // Constant pool
     // =========================================================================
 
@@ -56,7 +27,7 @@ namespace ir {
         if (it != const_i32_cache_.end()) {
             return it->second;
         }
-        IntegerType* i32 = GetI32Type();
+        IntegerType* i32 = TypeManager::Get().GetI32Type();
         auto c = std::make_unique<ConstantInt>("", i32, value);
         ConstantInt* p = c.get();
         constants_.push_back(std::move(c));
@@ -69,7 +40,7 @@ namespace ir {
         if (it != const_i8_cache_.end()) {
             return it->second;
         }
-        IntegerType* i8 = GetI8Type();
+        IntegerType* i8 = TypeManager::Get().GetI8Type();
         auto c = std::make_unique<ConstantInt>("", i8, value);
         ConstantInt* p = c.get();
         constants_.push_back(std::move(c));
@@ -101,20 +72,21 @@ namespace ir {
 
     std::optional<Module::LibFuncDescriptor>
     Module::GetLibFunctionDescriptor(const std::string& name) {
+        auto& tm = TypeManager::Get();
         if (name == "getint") {
-            return LibFuncDescriptor{GetI32Type(), {}};
+            return LibFuncDescriptor{tm.GetI32Type(), {}};
         }
         if (name == "getchar") {
-            return LibFuncDescriptor{GetI32Type(), {}};
+            return LibFuncDescriptor{tm.GetI32Type(), {}};
         }
         if (name == "putint") {
-            return LibFuncDescriptor{GetVoidType(), {GetI32Type()}};
+            return LibFuncDescriptor{tm.GetVoidType(), {tm.GetI32Type()}};
         }
         if (name == "putch") {
-            return LibFuncDescriptor{GetVoidType(), {GetI32Type()}};
+            return LibFuncDescriptor{tm.GetVoidType(), {tm.GetI32Type()}};
         }
         if (name == "putstr") {
-            return LibFuncDescriptor{GetVoidType(), {GetPointerType(GetI8Type())}};
+            return LibFuncDescriptor{tm.GetVoidType(), {tm.GetPointerType(tm.GetI8Type())}};
         }
         return std::nullopt;
     }

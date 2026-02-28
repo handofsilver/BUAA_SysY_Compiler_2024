@@ -4,6 +4,8 @@
  */
 #include "irgen/TypeMapping.h"
 
+#include "ir/TypeManager.h"
+
 namespace irgen {
 
     std::optional<ir::IcmpPred> OpTypeToIcmpPred(OpType op) {
@@ -34,24 +36,27 @@ namespace irgen {
                op == OpType::MOD;
     }
 
-    ir::Type* BTypeToReturnType(BType btype, ir::Module* module) {
+    ir::Type* BTypeToReturnType(BType btype) {
+        auto& tm = ir::TypeManager::Get();
         switch (btype) {
-            case BType::VOID: return module->GetVoidType();
-            case BType::INT: return module->GetI32Type();
-            case BType::CHAR: return module->GetI8Type();
-            default: return module->GetI32Type();
+            case BType::VOID: return tm.GetVoidType();
+            case BType::INT: return tm.GetI32Type();
+            case BType::CHAR: return tm.GetI8Type();
+            default: return tm.GetI32Type();
         }
     }
 
-    ir::Type* BTypeToParamType(BType btype, bool is_array, ir::Module* module) {
-        ir::Type* elem = (btype == BType::CHAR) ? static_cast<ir::Type*>(module->GetI8Type()) :
-                                                  static_cast<ir::Type*>(module->GetI32Type());
-        return is_array ? static_cast<ir::Type*>(module->GetPointerType(elem)) : elem;
+    ir::Type* BTypeToParamType(BType btype, bool is_array) {
+        auto& tm = ir::TypeManager::Get();
+        ir::Type* elem = (btype == BType::CHAR) ? static_cast<ir::Type*>(tm.GetI8Type()) :
+                                                  static_cast<ir::Type*>(tm.GetI32Type());
+        return is_array ? static_cast<ir::Type*>(tm.GetPointerType(elem)) : elem;
     }
 
-    ir::Type* BTypeToAllocaType(BType btype, ir::Module* module) {
-        return (btype == BType::CHAR) ? static_cast<ir::Type*>(module->GetI8Type()) :
-                                        static_cast<ir::Type*>(module->GetI32Type());
+    ir::Type* BTypeToAllocaType(BType btype) {
+        auto& tm = ir::TypeManager::Get();
+        return (btype == BType::CHAR) ? static_cast<ir::Type*>(tm.GetI8Type()) :
+                                        static_cast<ir::Type*>(tm.GetI32Type());
     }
 
 } // namespace irgen

@@ -13,6 +13,7 @@
 #include "IRBuilder.h"
 #include "ir/Function.h"
 #include "ir/Module.h"
+#include "ir/TypeManager.h"
 #include <map>
 #include <memory>
 #include <string>
@@ -74,6 +75,7 @@ private:
 
     std::unique_ptr<ir::Module> module_;
     std::unique_ptr<ir::IRBuilder> builder_;
+    ir::TypeManager& types_ = ir::TypeManager::Get();
 
     /**
      * @brief Last computed value from the most recent expression/operand visit.

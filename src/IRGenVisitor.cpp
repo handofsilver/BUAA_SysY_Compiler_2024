@@ -19,7 +19,6 @@
 IRGenVisitor::IRGenVisitor() {
     module_ = std::make_unique<ir::Module>();
     builder_ = std::make_unique<ir::IRBuilder>();
-    builder_->SetModule(module_.get());
 }
 
 std::unique_ptr<ir::Module> IRGenVisitor::Translate(CompUnit& comp_unit) {
@@ -92,17 +91,17 @@ ir::Value* IRGenVisitor::CoerceToI1(ir::Value* cond_val) {
     if (!cond_val || !builder_->GetInsertBlock()) {
         return nullptr;
     }
-    if (cond_val->GetType() && cond_val->GetType() == module_->GetI1Type()) {
+    if (cond_val->GetType() && cond_val->GetType() == types_.GetI1Type()) {
         return cond_val;
     }
     cond_val = PromoteToI32(cond_val);
-    ir::Instruction* cmp = builder_->CreateIcmp(module_->GetI1Type(), ir::IcmpPred::NE, cond_val,
+    ir::Instruction* cmp = builder_->CreateIcmp(types_.GetI1Type(), ir::IcmpPred::NE, cond_val,
                                                 module_->GetInt32Constant(0));
     return cmp ? cmp : cond_val;
 }
 
 void IRGenVisitor::EmitShortCircuitAND(Exp* lhs, Exp* rhs) {
-    ir::Instruction* result_slot = CreateEntryBlockAlloca(module_->GetI32Type());
+    ir::Instruction* result_slot = CreateEntryBlockAlloca(types_.GetI32Type());
     if (!result_slot || !builder_->GetInsertBlock()) {
         return;
     }
@@ -144,7 +143,7 @@ void IRGenVisitor::EmitShortCircuitAND(Exp* lhs, Exp* rhs) {
 }
 
 void IRGenVisitor::EmitShortCircuitOR(Exp* lhs, Exp* rhs) {
-    ir::Instruction* result_slot = CreateEntryBlockAlloca(module_->GetI32Type());
+    ir::Instruction* result_slot = CreateEntryBlockAlloca(types_.GetI32Type());
     if (!result_slot || !builder_->GetInsertBlock()) {
         return;
     }
@@ -194,8 +193,7 @@ ir::Instruction* IRGenVisitor::CreateEntryBlockAlloca(ir::Type* type) {
         return nullptr;
     }
     ir::BasicBlock* entry = blocks.front().get();
-    ir::Type* ptr_type =
-        module_->GetPointerType(type); // alloca result is pointer to allocated type
+    ir::Type* ptr_type = types_.GetPointerType(type); // alloca result is pointer to allocated type
     std::string name = builder_->GetNextSSAName();
     auto inst = std::make_unique<ir::AllocaInst>(name, ptr_type, entry);
     ir::Instruction* result = inst.get();
@@ -224,7 +222,7 @@ ir::Value* IRGenVisitor::PromoteToI32(ir::Value* v) {
     if (!int_ty || int_ty->GetBits() != 8) {
         return v;
     }
-    ir::Instruction* z = builder_->CreateZext(v, module_->GetI32Type());
+    ir::Instruction* z = builder_->CreateZext(v, types_.GetI32Type());
     return z ? z : v;
 }
 
@@ -243,11 +241,11 @@ ir::Value* IRGenVisitor::ConvertToTargetType(ir::Value* v, ir::Type* target_ty) 
         return v;
     }
     if (target_bits == 8 && val_bits == 32) {
-        ir::Instruction* t = builder_->CreateTrunc(v, module_->GetI8Type());
+        ir::Instruction* t = builder_->CreateTrunc(v, types_.GetI8Type());
         return t ? t : v;
     }
     if (target_bits == 32 && val_bits == 8) {
-        ir::Instruction* z = builder_->CreateZext(v, module_->GetI32Type());
+        ir::Instruction* z = builder_->CreateZext(v, types_.GetI32Type());
         return z ? z : v;
     }
     return v;
@@ -258,8 +256,8 @@ ir::Value* IRGenVisitor::ConvertToTargetType(ir::Value* v, ir::Type* target_ty) 
 // -----------------------------------------------------------------------------
 
 ir::Type* IRGenVisitor::GetCurDeclType() const {
-    return (current_decl_btype_ == BType::CHAR) ? static_cast<ir::Type*>(module_->GetI8Type()) :
-                                                  static_cast<ir::Type*>(module_->GetI32Type());
+    return (current_decl_btype_ == BType::CHAR) ? static_cast<ir::Type*>(types_.GetI8Type()) :
+                                                  static_cast<ir::Type*>(types_.GetI32Type());
 }
 
 int IRGenVisitor::EvalArraySizeFromConstExp(ConstExp* cexp) {
@@ -293,7 +291,7 @@ void IRGenVisitor::EmitGlobalConstDef(ConstDef& const_def, ir::Type* elem_type) 
     if (kIsArray) {
         // --- Global const array: type [N x T], init = ConstantArray (no Store allowed) ---
         int n = EvalArraySizeFromConstExp(const_def.array_size->get());
-        ir::ArrayType* arr_ty = module_->GetArrayType(elem_type, static_cast<unsigned>(n));
+        ir::ArrayType* arr_ty = types_.GetArrayType(elem_type, static_cast<unsigned>(n));
         var_type = arr_ty;
 
         // Parse init: ConstInitVal is variant<SingleExp, ExpList, StringVal>; we need ExpList or
@@ -330,7 +328,7 @@ void IRGenVisitor::EmitGlobalConstDef(ConstDef& const_def, ir::Type* elem_type) 
 
     // Globals: in LLVM IR the name denotes the address, so type is always pointer (i32* or [N x
     // T]*).
-    ir::Type* global_type = module_->GetPointerType(var_type);
+    ir::Type* global_type = types_.GetPointerType(var_type);
     ir::GlobalVar* gv = module_->CreateGlobalVar(const_def.ident, global_type, init, true);
     RegisterVariable(const_def.ident, gv);
 }
@@ -341,7 +339,7 @@ void IRGenVisitor::EmitLocalConstDef(ConstDef& const_def, ir::Type* elem_type) {
     if (kIsArray) {
         // Local const array: alloca [N x T], then GEP+Store for each element
         int n = EvalArraySizeFromConstExp(const_def.array_size->get());
-        ir::ArrayType* arr_ty = module_->GetArrayType(elem_type, static_cast<unsigned>(n));
+        ir::ArrayType* arr_ty = types_.GetArrayType(elem_type, static_cast<unsigned>(n));
         ir::Instruction* alloca = CreateEntryBlockAlloca(arr_ty);
         RegisterVariable(const_def.ident, alloca);
 
@@ -351,8 +349,8 @@ void IRGenVisitor::EmitLocalConstDef(ConstDef& const_def, ir::Type* elem_type) {
                 int val = irgen::EvalConstInt((*list)[i]->inner.get());
                 ir::Value* to_store = BuildConstScalarInit(val);
                 ir::Value* idx = module_->GetInt32Constant(static_cast<int64_t>(i));
-                ir::Instruction* gep = builder_->CreateGEP(
-                    module_->GetPointerType(elem_type), alloca, module_->GetInt32Constant(0), idx);
+                ir::Instruction* gep = builder_->CreateGEP(types_.GetPointerType(elem_type), alloca,
+                                                           module_->GetInt32Constant(0), idx);
                 if (gep && to_store) {
                     builder_->CreateStore(to_store, gep);
                 }
@@ -362,13 +360,13 @@ void IRGenVisitor::EmitLocalConstDef(ConstDef& const_def, ir::Type* elem_type) {
             if (str && builder_->GetInsertBlock()) {
                 // String literal: emit global [len+1 x i8], then copy bytes into local alloca
                 ir::Value* global_str = EmitGlobalStringLiteral(*str);
-                ir::Type* i8 = module_->GetI8Type();
+                ir::Type* i8 = types_.GetI8Type();
                 size_t copy_len =
                     static_cast<size_t>(std::min(n, static_cast<int>(str->size()) + 1));
                 for (size_t i = 0; i < copy_len; ++i) {
                     ir::Value* idx = module_->GetInt32Constant(static_cast<int64_t>(i));
                     ir::Instruction* src_gep = builder_->CreateGEP(
-                        module_->GetPointerType(i8), global_str, module_->GetInt32Constant(0), idx);
+                        types_.GetPointerType(i8), global_str, module_->GetInt32Constant(0), idx);
                     if (!src_gep) {
                         continue;
                     }
@@ -377,7 +375,7 @@ void IRGenVisitor::EmitLocalConstDef(ConstDef& const_def, ir::Type* elem_type) {
                         continue;
                     }
                     ir::Instruction* dst_gep =
-                        builder_->CreateGEP(module_->GetPointerType(elem_type), alloca,
+                        builder_->CreateGEP(types_.GetPointerType(elem_type), alloca,
                                             module_->GetInt32Constant(0), idx);
                     if (dst_gep) {
                         builder_->CreateStore(load, dst_gep);
@@ -386,7 +384,7 @@ void IRGenVisitor::EmitLocalConstDef(ConstDef& const_def, ir::Type* elem_type) {
                 for (size_t i = copy_len; i < static_cast<size_t>(n); ++i) {
                     ir::Value* idx = module_->GetInt32Constant(static_cast<int64_t>(i));
                     ir::Instruction* dst_gep =
-                        builder_->CreateGEP(module_->GetPointerType(elem_type), alloca,
+                        builder_->CreateGEP(types_.GetPointerType(elem_type), alloca,
                                             module_->GetInt32Constant(0), idx);
                     if (dst_gep) {
                         builder_->CreateStore(module_->GetInt8Constant(0), dst_gep);
@@ -416,7 +414,7 @@ void IRGenVisitor::EmitGlobalVarDef(VarDef& var_def, ir::Type* elem_type) {
     if (kIsArray) {
         // --- Global var array: [N x T], init = ConstantArray (or zero-padded) ---
         int n = EvalArraySizeFromConstExp(var_def.array_size->get());
-        ir::ArrayType* arr_ty = module_->GetArrayType(elem_type, static_cast<unsigned>(n));
+        ir::ArrayType* arr_ty = types_.GetArrayType(elem_type, static_cast<unsigned>(n));
         var_type = arr_ty;
 
         // VarDef may have no init_val (e.g. int a[3];); if present, parse ExpList and eval each.
@@ -453,7 +451,7 @@ void IRGenVisitor::EmitGlobalVarDef(VarDef& var_def, ir::Type* elem_type) {
     }
 
     // In LLVM IR the global name denotes the address, so type is always pointer (i32* or [N x T]*).
-    ir::Type* global_type = module_->GetPointerType(var_type);
+    ir::Type* global_type = types_.GetPointerType(var_type);
     ir::GlobalVar* gv = module_->CreateGlobalVar(var_def.ident, global_type, init, false);
     RegisterVariable(var_def.ident, gv);
 }
@@ -467,7 +465,7 @@ void IRGenVisitor::EmitLocalVarDef(VarDef& var_def, ir::Type* elem_type) {
         if (var_def.array_size && var_def.array_size->get()) {
             n = EvalArraySizeFromConstExp(var_def.array_size->get());
         }
-        ir::ArrayType* arr_ty = module_->GetArrayType(elem_type, static_cast<unsigned>(n));
+        ir::ArrayType* arr_ty = types_.GetArrayType(elem_type, static_cast<unsigned>(n));
         ir::Instruction* alloca = CreateEntryBlockAlloca(arr_ty);
         RegisterVariable(var_def.ident, alloca);
 
@@ -482,7 +480,7 @@ void IRGenVisitor::EmitLocalVarDef(VarDef& var_def, ir::Type* elem_type) {
                         val = ConvertToTargetType(val, elem_type);
                         ir::Value* idx = module_->GetInt32Constant(static_cast<int64_t>(i));
                         ir::Instruction* gep =
-                            builder_->CreateGEP(module_->GetPointerType(elem_type), alloca,
+                            builder_->CreateGEP(types_.GetPointerType(elem_type), alloca,
                                                 module_->GetInt32Constant(0), idx);
                         if (gep) {
                             builder_->CreateStore(val, gep);
@@ -494,13 +492,13 @@ void IRGenVisitor::EmitLocalVarDef(VarDef& var_def, ir::Type* elem_type) {
                 if (str) {
                     // String literal: emit global [len+1 x i8], then copy bytes into local alloca
                     ir::Value* global_str = EmitGlobalStringLiteral(*str);
-                    ir::Type* i8 = module_->GetI8Type();
+                    ir::Type* i8 = types_.GetI8Type();
                     size_t copy_len =
                         static_cast<size_t>(std::min(n, static_cast<int>(str->size()) + 1));
                     for (size_t i = 0; i < copy_len; ++i) {
                         ir::Value* idx = module_->GetInt32Constant(static_cast<int64_t>(i));
                         ir::Instruction* src_gep =
-                            builder_->CreateGEP(module_->GetPointerType(i8), global_str,
+                            builder_->CreateGEP(types_.GetPointerType(i8), global_str,
                                                 module_->GetInt32Constant(0), idx);
                         if (!src_gep) {
                             continue;
@@ -510,7 +508,7 @@ void IRGenVisitor::EmitLocalVarDef(VarDef& var_def, ir::Type* elem_type) {
                             continue;
                         }
                         ir::Instruction* dst_gep =
-                            builder_->CreateGEP(module_->GetPointerType(elem_type), alloca,
+                            builder_->CreateGEP(types_.GetPointerType(elem_type), alloca,
                                                 module_->GetInt32Constant(0), idx);
                         if (dst_gep) {
                             builder_->CreateStore(load, dst_gep);
@@ -519,7 +517,7 @@ void IRGenVisitor::EmitLocalVarDef(VarDef& var_def, ir::Type* elem_type) {
                     for (size_t i = copy_len; i < static_cast<size_t>(n); ++i) {
                         ir::Value* idx = module_->GetInt32Constant(static_cast<int64_t>(i));
                         ir::Instruction* dst_gep =
-                            builder_->CreateGEP(module_->GetPointerType(elem_type), alloca,
+                            builder_->CreateGEP(types_.GetPointerType(elem_type), alloca,
                                                 module_->GetInt32Constant(0), idx);
                         if (dst_gep) {
                             builder_->CreateStore(module_->GetInt8Constant(0), dst_gep);
@@ -555,10 +553,10 @@ ir::Value* IRGenVisitor::EmitGlobalStringLiteral(const std::string& str) {
         inits.push_back(module_->GetInt8Constant(static_cast<int64_t>(c)));
     }
     inits.push_back(module_->GetInt8Constant(0));
-    ir::Type* i8 = module_->GetI8Type();
-    ir::ArrayType* arr_ty = module_->GetArrayType(i8, static_cast<unsigned>(inits.size()));
+    ir::Type* i8 = types_.GetI8Type();
+    ir::ArrayType* arr_ty = types_.GetArrayType(i8, static_cast<unsigned>(inits.size()));
     ir::Constant* init = module_->CreateConstantArray(arr_ty, inits);
     std::string name = ".str." + std::to_string(printf_str_counter_++);
-    ir::GlobalVar* gv = module_->CreateGlobalVar(name, module_->GetPointerType(arr_ty), init, true);
+    ir::GlobalVar* gv = module_->CreateGlobalVar(name, types_.GetPointerType(arr_ty), init, true);
     return gv;
 }

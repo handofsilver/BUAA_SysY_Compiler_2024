@@ -12,10 +12,10 @@
 // -----------------------------------------------------------------------------
 
 void IRGenVisitor::VisitFuncDef(FuncDef& func_def) {
-    ir::Type* return_type = irgen::BTypeToReturnType(func_def.func_type, module_.get());
+    ir::Type* return_type = irgen::BTypeToReturnType(func_def.func_type);
     std::vector<ir::Type*> param_types;
     for (const auto& p : func_def.func_f_params) {
-        param_types.push_back(irgen::BTypeToParamType(p->btype, p->is_array, module_.get()));
+        param_types.push_back(irgen::BTypeToParamType(p->btype, p->is_array));
     }
     ir::Function* func = module_->CreateFunction(func_def.ident, return_type, param_types);
     current_function_ = func;
@@ -34,7 +34,7 @@ void IRGenVisitor::VisitFuncDef(FuncDef& func_def) {
         if (p->is_array) {
             RegisterVariable(p->ident, arg_val);
         } else {
-            ir::Type* alloc_ty = irgen::BTypeToAllocaType(p->btype, module_.get());
+            ir::Type* alloc_ty = irgen::BTypeToAllocaType(p->btype);
             ir::Instruction* alloca_inst = CreateEntryBlockAlloca(alloc_ty);
             if (alloca_inst && builder_->GetInsertBlock()) {
                 builder_->CreateStore(arg_val, alloca_inst);
@@ -51,7 +51,7 @@ void IRGenVisitor::VisitFuncDef(FuncDef& func_def) {
 }
 
 void IRGenVisitor::VisitMainFuncDef(MainFuncDef& main_func_def) {
-    ir::Function* func = module_->CreateFunction("main", module_->GetI32Type(), {});
+    ir::Function* func = module_->CreateFunction("main", types_.GetI32Type(), {});
     current_function_ = func;
     IRScopeGuard scope_guard(*this);
 

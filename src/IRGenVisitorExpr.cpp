@@ -58,11 +58,11 @@ void IRGenVisitor::VisitLVal(LVal& lval) {
     ir::Instruction* gep = nullptr;
     if (auto* arr_ty = dynamic_cast<ir::ArrayType*>(pointee)) {
         elem_ty = arr_ty->GetElementType();
-        gep = builder_->CreateGEP(module_->GetPointerType(elem_ty), value,
+        gep = builder_->CreateGEP(types_.GetPointerType(elem_ty), value,
                                   module_->GetInt32Constant(0), index_val);
     } else {
         elem_ty = pointee;
-        gep = builder_->CreateGEP(module_->GetPointerType(elem_ty), value, index_val);
+        gep = builder_->CreateGEP(types_.GetPointerType(elem_ty), value, index_val);
     }
     if (!gep) {
         temp_value_ = value;
@@ -115,9 +115,9 @@ void IRGenVisitor::VisitBinaryExp(BinaryExp& binary_exp) {
     if (pred) {
         lhs = PromoteToI32(lhs);
         rhs = PromoteToI32(rhs);
-        ir::Instruction* cmp = builder_->CreateIcmp(module_->GetI1Type(), *pred, lhs, rhs);
+        ir::Instruction* cmp = builder_->CreateIcmp(types_.GetI1Type(), *pred, lhs, rhs);
         if (cmp) {
-            ir::Instruction* zext = builder_->CreateZext(cmp, module_->GetI32Type());
+            ir::Instruction* zext = builder_->CreateZext(cmp, types_.GetI32Type());
             temp_value_ = zext ? zext : cmp;
         }
         return;
@@ -143,9 +143,9 @@ void IRGenVisitor::VisitUnaryExp(UnaryExp& unary_exp) {
     if (op == OpType::NOT) {
         operand = PromoteToI32(operand);
         ir::Instruction* cmp =
-            builder_->CreateIcmp(module_->GetI1Type(), ir::IcmpPred::EQ, operand, zero);
+            builder_->CreateIcmp(types_.GetI1Type(), ir::IcmpPred::EQ, operand, zero);
         if (cmp) {
-            ir::Instruction* zext = builder_->CreateZext(cmp, module_->GetI32Type());
+            ir::Instruction* zext = builder_->CreateZext(cmp, types_.GetI32Type());
             temp_value_ = zext ? zext : cmp;
         }
         return;
@@ -190,7 +190,7 @@ void IRGenVisitor::VisitFuncCall(FuncCall& func_call) {
         converted_args.push_back(ConvertToTargetType(arg, param_types[i]));
     }
     ir::Instruction* call = builder_->CreateCall(ret_type, callee, converted_args);
-    if (call && ret_type && ret_type != module_->GetVoidType()) {
+    if (call && ret_type && ret_type != types_.GetVoidType()) {
         temp_value_ = call;
     }
 }
