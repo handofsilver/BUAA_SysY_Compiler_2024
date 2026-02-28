@@ -1,87 +1,55 @@
 /**
  * @file Module.cpp
- * @brief Module: type and constant pool; out-of-line destructor.
+ * @brief Module: constant pool, function/global management; out-of-line destructor.
+ *
+ * Type management has been extracted to TypeManager. The GetXxxType() methods
+ * here are thin delegations for backward compatibility.
  *
  * Lib I/O (getint, getchar, putint, putch, putstr): only declare on demand.
  * GetFunction(name) calls EnsureDeclaredLibFunction(name), which adds a declaration for
  * that name only if it is one of the course-defined lib functions and not yet present.
- * Single source of truth: the 5 lib signatures live in GetLibFunctionDescriptor(); only
- * declarations for actually used lib functions appear in the module.
  */
 #include "ir/Module.h"
+
+#include "ir/TypeManager.h"
+
 #include <cassert>
+
 namespace ir {
 
     Module::~Module() = default;
 
-    PointerType* Module::GetPointerType(Type* pointee_type) {
-        assert(pointee_type);
-
-        auto it = ptr_type_cache_.find(pointee_type);
-        if (it != ptr_type_cache_.end()) {
-            return it->second;
-        }
-        pointer_types_.push_back(std::make_unique<PointerType>(pointee_type));
-        PointerType* p = pointer_types_.back().get();
-        ptr_type_cache_[pointee_type] = p;
-        return p;
-    }
+    // =========================================================================
+    // Type access — thin delegations to TypeManager
+    // =========================================================================
 
     IntegerType* Module::GetI32Type() {
-        if (integer_types_.empty()) {
-            integer_types_.push_back(std::make_unique<IntegerType>(32));
-            integer_types_.push_back(std::make_unique<IntegerType>(8));
-            integer_types_.push_back(std::make_unique<IntegerType>(1));
-        }
-        return integer_types_[0].get();
+        return TypeManager::Get().GetI32Type();
     }
-
     IntegerType* Module::GetI8Type() {
-        if (integer_types_.empty()) {
-            integer_types_.push_back(std::make_unique<IntegerType>(32));
-            integer_types_.push_back(std::make_unique<IntegerType>(8));
-            integer_types_.push_back(std::make_unique<IntegerType>(1));
-        }
-        return integer_types_[1].get();
+        return TypeManager::Get().GetI8Type();
     }
-
     IntegerType* Module::GetI1Type() {
-        if (integer_types_.empty()) {
-            integer_types_.push_back(std::make_unique<IntegerType>(32));
-            integer_types_.push_back(std::make_unique<IntegerType>(8));
-            integer_types_.push_back(std::make_unique<IntegerType>(1));
-        }
-        return integer_types_[2].get();
+        return TypeManager::Get().GetI1Type();
     }
-
     VoidType* Module::GetVoidType() {
-        if (!void_type_) {
-            void_type_ = std::make_unique<VoidType>();
-        }
-        return void_type_.get();
+        return TypeManager::Get().GetVoidType();
+    }
+    LabelType* Module::GetLabelType() {
+        return TypeManager::Get().GetLabelType();
     }
 
-    LabelType* Module::GetLabelType() {
-        if (!label_type_) {
-            label_type_ = std::make_unique<LabelType>();
-        }
-        return label_type_.get();
+    PointerType* Module::GetPointerType(Type* pointee_type) {
+        return TypeManager::Get().GetPointerType(pointee_type);
     }
 
     ArrayType* Module::GetArrayType(Type* element_type, unsigned num_elements) {
-        assert(element_type && num_elements > 0);
-        array_types_.push_back(std::make_unique<ArrayType>(element_type, num_elements));
-        return array_types_.back().get();
+        return TypeManager::Get().GetArrayType(element_type, num_elements);
     }
 
-    ConstantArray* Module::CreateConstantArray(ArrayType* type,
-                                               const std::vector<Constant*>& elements) {
-        assert(type && !elements.empty());
-        auto c = std::make_unique<ConstantArray>("", type, elements);
-        ConstantArray* p = c.get();
-        other_constants_.push_back(std::move(c));
-        return p;
-    }
+    // =========================================================================
+    // Constant pool
+    // =========================================================================
 
     ConstantInt* Module::GetInt32Constant(int64_t value) {
         auto it = const_i32_cache_.find(value);
@@ -109,6 +77,19 @@ namespace ir {
         return p;
     }
 
+    ConstantArray* Module::CreateConstantArray(ArrayType* type,
+                                               const std::vector<Constant*>& elements) {
+        assert(type && !elements.empty());
+        auto c = std::make_unique<ConstantArray>("", type, elements);
+        ConstantArray* p = c.get();
+        other_constants_.push_back(std::move(c));
+        return p;
+    }
+
+    // =========================================================================
+    // Function management
+    // =========================================================================
+
     Function* Module::FindFunctionByName(const std::string& name) const {
         for (const auto& f : functions_) {
             if (f->GetName() == name) {
@@ -120,7 +101,6 @@ namespace ir {
 
     std::optional<Module::LibFuncDescriptor>
     Module::GetLibFunctionDescriptor(const std::string& name) {
-        // Course-defined lib I/O: getint, getchar, putint, putch, putstr (declare only, no define).
         if (name == "getint") {
             return LibFuncDescriptor{GetI32Type(), {}};
         }
@@ -166,6 +146,10 @@ namespace ir {
         return ptr;
     }
 
+    // =========================================================================
+    // Global variable management
+    // =========================================================================
+
     GlobalVar* Module::CreateGlobalVar(const std::string& name, Type* type, Constant* init,
                                        bool is_constant) {
         global_vars_.push_back(std::make_unique<GlobalVar>(name, type));
@@ -174,6 +158,10 @@ namespace ir {
         g->SetConstant(is_constant);
         return g;
     }
+
+    // =========================================================================
+    // Print
+    // =========================================================================
 
     void Module::Print(std::ostream& os) const {
         for (const auto& g : global_vars_) {
@@ -187,4 +175,5 @@ namespace ir {
             }
         }
     }
+
 } // namespace ir

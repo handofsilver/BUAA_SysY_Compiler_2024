@@ -1,9 +1,11 @@
 /**
  * @file Module.h
- * @brief Module: top-level container for global variables and functions.
+ * @brief Module: top-level container for global variables, functions, and constants.
  *
- * The Module owns all GlobalVars and Functions. It is the root of the
- * IR ownership tree.
+ * The Module owns all GlobalVars, Functions, and Constants.
+ * Type management has been extracted to TypeManager (Flyweight singleton);
+ * the convenience type-getters here are thin delegations kept for backward
+ * compatibility with existing callers (IRGenVisitor, IRBuilder, TypeMapping).
  */
 #pragma once
 
@@ -11,8 +13,6 @@
 #include "ir/Function.h"
 #include "ir/GlobalVar.h"
 #include "ir/Type.h"
-
-#include <vector>
 
 #include <memory>
 #include <optional>
@@ -26,7 +26,8 @@ namespace ir {
     /**
      * @brief Top-level IR container: globals, functions, and constant pool.
      *
-     * Ownership: Module owns all GlobalVar, Function, and ConstantInt objects.
+     * Ownership: Module owns GlobalVar, Function, FunctionType, and Constant objects.
+     * Type ownership has moved to TypeManager.
      */
     class Module {
     public:
@@ -48,22 +49,20 @@ namespace ir {
             return functions_;
         }
 
-        /** @brief Common types (owned here). */
+        // -- Type access (delegates to TypeManager) ------------------------------
+        // These thin wrappers exist so that callers (IRGenVisitor, IRBuilder, etc.)
+        // do not need to be updated in this commit.  A follow-up commit can migrate
+        // callers to TypeManager::Get() directly and remove these.
+
         IntegerType* GetI32Type();
         IntegerType* GetI8Type();
         IntegerType* GetI1Type();
         VoidType* GetVoidType();
         LabelType* GetLabelType();
-
-        /**
-         * @brief Get the pointer type for the given pointee type.
-         */
         PointerType* GetPointerType(Type* pointee_type);
-
-        /**
-         * @brief Get or create an array type [N x element_type]. Owned by module.
-         */
         ArrayType* GetArrayType(Type* element_type, unsigned num_elements);
+
+        // -- Constant pool -------------------------------------------------------
 
         /**
          * @brief Get or create an i32 constant. Returned pointer is valid for module lifetime.
@@ -79,6 +78,8 @@ namespace ir {
          * @brief Create a constant array (owned by module). Used as global initializer.
          */
         ConstantArray* CreateConstantArray(ArrayType* type, const std::vector<Constant*>& elements);
+
+        // -- Function management -------------------------------------------------
 
         /**
          * @brief Get a function by name. Known lib I/O (getint, getchar, putint, putch, putstr)
@@ -96,6 +97,8 @@ namespace ir {
          */
         Function* CreateFunction(const std::string& name, Type* return_type,
                                  const std::vector<Type*>& param_types);
+
+        // -- Global variable management ------------------------------------------
 
         /**
          * @brief Create a global variable (or constant) with optional initializer.
@@ -133,18 +136,14 @@ namespace ir {
 
         std::vector<std::unique_ptr<GlobalVar>> global_vars_;
         std::vector<std::unique_ptr<Function>> functions_;
-        /** Owning storage for FunctionTypes of lib declarations (getint, putint, ...). */
+        /** Owning storage for FunctionTypes (lib declarations + user functions). */
         std::vector<std::unique_ptr<FunctionType>> function_types_;
-        std::vector<std::unique_ptr<IntegerType>> integer_types_;
-        std::vector<std::unique_ptr<PointerType>> pointer_types_;
-        std::unordered_map<Type*, PointerType*> ptr_type_cache_;
+
+        // -- Constant pool (owned) -----------------------------------------------
         std::vector<std::unique_ptr<ConstantInt>> constants_;
         std::unordered_map<int64_t, ConstantInt*> const_i32_cache_;
         std::unordered_map<int64_t, ConstantInt*> const_i8_cache_;
-        std::vector<std::unique_ptr<ArrayType>> array_types_;
         std::vector<std::unique_ptr<Constant>> other_constants_;
-        std::unique_ptr<VoidType> void_type_;
-        std::unique_ptr<LabelType> label_type_;
     };
 
 } // namespace ir
