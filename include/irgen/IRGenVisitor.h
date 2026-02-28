@@ -10,10 +10,10 @@
 
 #include "AST.h"
 #include "ASTVisitor.h"
-#include "IRGenContext.h"
 #include "ir/Module.h"
 #include "ir/TypeManager.h"
 #include "irgen/IRDeclEmitter.h"
+#include "irgen/IRGenContext.h"
 #include <memory>
 #include <string>
 #include <vector>

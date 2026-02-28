@@ -4,10 +4,10 @@
  * All front-end outputs (lexer, parser, symbol) are collected here; main only does file I/O.
  */
 #include "Driver.h"
-#include "IRGenVisitor.h"
 #include "Lexer.h"
 #include "Parser.h"
 #include "Symbol.h"
+#include "irgen/IRGenVisitor.h"
 #include <algorithm>
 #include <memory>
 #include <sstream>

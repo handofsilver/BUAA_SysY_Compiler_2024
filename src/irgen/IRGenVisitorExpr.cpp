@@ -3,9 +3,9 @@
  * @brief IRGenVisitor: expressions (LVal, number, character, binary/unary, func call, const exp).
  */
 #include "AST.h"
-#include "IRGenVisitor.h"
 #include "ir/Instruction.h"
 #include "ir/Type.h"
+#include "irgen/IRGenVisitor.h"
 #include "irgen/TypeMapping.h"
 #include <optional>
 

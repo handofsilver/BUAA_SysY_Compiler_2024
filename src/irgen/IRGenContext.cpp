@@ -2,7 +2,7 @@
  * @file IRGenContext.cpp
  * @brief Implementation of IRGenContext: scope chain management.
  */
-#include "IRGenContext.h"
+#include "irgen/IRGenContext.h"
 
 IRGenContext::IRGenContext(ir::Module* module, ir::IRBuilder* builder, ir::TypeManager& types) :
 module(module),

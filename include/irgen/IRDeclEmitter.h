@@ -8,17 +8,17 @@
  */
 #pragma once
 
-#include "IRGenContext.h"
 #include "ir/Type.h"
+#include "irgen/IRGenContext.h"
 #include <string>
 #include <vector>
 
 namespace ir {
-class Value;
-class Instruction;
-class ConstantInt;
-class ConstantArray;
-class ArrayType;
+    class Value;
+    class Instruction;
+    class ConstantInt;
+    class ConstantArray;
+    class ArrayType;
 } // namespace ir
 
 class IRDeclEmitter {

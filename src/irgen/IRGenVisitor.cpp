@@ -4,13 +4,13 @@
  * declaration emission, CompUnit/Decl/Func dispatch. Stmt and Expr visitors are in
  * IRGenVisitorStmt.cpp and IRGenVisitorExpr.cpp respectively.
  */
-#include "IRGenVisitor.h"
+#include "irgen/IRGenVisitor.h"
 #include "AST.h"
-#include "IRScopeGuard.h"
 #include "ir/Constant.h"
 #include "ir/Instruction.h"
 #include "ir/Type.h"
 #include "irgen/ConstExpEvaluator.h"
+#include "irgen/IRScopeGuard.h"
 #include "irgen/TypeMapping.h"
 
 // -----------------------------------------------------------------------------

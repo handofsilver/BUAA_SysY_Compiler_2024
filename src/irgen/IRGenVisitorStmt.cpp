@@ -4,8 +4,8 @@
  * printf).
  */
 #include "AST.h"
-#include "IRGenVisitor.h"
-#include "IRScopeGuard.h"
+#include "irgen/IRGenVisitor.h"
+#include "irgen/IRScopeGuard.h"
 
 // -----------------------------------------------------------------------------
 // Block and statements

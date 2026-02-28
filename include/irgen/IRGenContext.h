@@ -7,7 +7,7 @@
  */
 #pragma once
 
-#include "IRBuilder.h"
+#include "ir/IRBuilder.h"
 #include "ir/Module.h"
 #include "ir/TypeManager.h"
 #include <map>
