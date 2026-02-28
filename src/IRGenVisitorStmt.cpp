@@ -219,7 +219,7 @@ void IRGenVisitor::VisitPrintfStmt(PrintfStmt& printf_stmt) {
     for (size_t i = 0; i < fmt.size(); ++i) {
         if (fmt[i] == '%' && i + 1 < fmt.size()) {
             if (!literal.empty()) {
-                ir::Value* str_ptr = EmitGlobalStringLiteral(literal);
+                ir::Value* str_ptr = decl_emitter_.EmitGlobalStringLiteral(literal);
                 if (str_ptr) {
                     ir::Function* putstr_fn = ctx_.module->GetFunction("putstr");
                     if (putstr_fn) {
@@ -263,7 +263,7 @@ void IRGenVisitor::VisitPrintfStmt(PrintfStmt& printf_stmt) {
         }
     }
     if (!literal.empty()) {
-        ir::Value* str_ptr = EmitGlobalStringLiteral(literal);
+        ir::Value* str_ptr = decl_emitter_.EmitGlobalStringLiteral(literal);
         if (str_ptr) {
             ir::Function* putstr_fn = ctx_.module->GetFunction("putstr");
             if (putstr_fn) {

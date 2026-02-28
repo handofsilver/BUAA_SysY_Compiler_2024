@@ -1,8 +1,8 @@
 /**
  * @file IRGenVisitor.cpp
- * @brief Core implementation of IRGenVisitor: constructor, Translate, control-flow helpers,
- * type conversion, and declaration emission helpers. Visit* for Decl/Func/Stmt/Expr are in
- * IRGenVisitorDecl.cpp, IRGenVisitorFunc.cpp, IRGenVisitorStmt.cpp, IRGenVisitorExpr.cpp.
+ * @brief Core IRGenVisitor implementation: constructor, control-flow helpers, type conversion,
+ * declaration emission, CompUnit/Decl/Func dispatch. Stmt and Expr visitors are in
+ * IRGenVisitorStmt.cpp and IRGenVisitorExpr.cpp respectively.
  */
 #include "IRGenVisitor.h"
 #include "AST.h"
@@ -11,6 +11,7 @@
 #include "ir/Instruction.h"
 #include "ir/Type.h"
 #include "irgen/ConstExpEvaluator.h"
+#include "irgen/TypeMapping.h"
 
 // -----------------------------------------------------------------------------
 // Constructor and module access
@@ -19,7 +20,8 @@
 IRGenVisitor::IRGenVisitor() :
 module_(std::make_unique<ir::Module>()),
 builder_(std::make_unique<ir::IRBuilder>()),
-ctx_(module_.get(), builder_.get(), types_) {}
+ctx_(module_.get(), builder_.get(), types_),
+decl_emitter_(ctx_) {}
 
 std::unique_ptr<ir::Module> IRGenVisitor::Translate(CompUnit& comp_unit) {
     IRScopeGuard guard(ctx_);
@@ -70,7 +72,7 @@ ir::Value* IRGenVisitor::CoerceToI1(ir::Value* cond_val) {
 }
 
 void IRGenVisitor::EmitShortCircuitAND(Exp* lhs, Exp* rhs) {
-    ir::Instruction* result_slot = CreateEntryBlockAlloca(ctx_.types.GetI32Type());
+    ir::Value* result_slot = decl_emitter_.EmitLocalAlloca("", ctx_.types.GetI32Type(), 0);
     if (!result_slot || !ctx_.builder->GetInsertBlock()) {
         return;
     }
@@ -112,7 +114,7 @@ void IRGenVisitor::EmitShortCircuitAND(Exp* lhs, Exp* rhs) {
 }
 
 void IRGenVisitor::EmitShortCircuitOR(Exp* lhs, Exp* rhs) {
-    ir::Instruction* result_slot = CreateEntryBlockAlloca(ctx_.types.GetI32Type());
+    ir::Value* result_slot = decl_emitter_.EmitLocalAlloca("", ctx_.types.GetI32Type(), 0);
     if (!result_slot || !ctx_.builder->GetInsertBlock()) {
         return;
     }
@@ -153,34 +155,9 @@ void IRGenVisitor::EmitShortCircuitOR(Exp* lhs, Exp* rhs) {
     temp_value_ = load ? load : result_slot;
 }
 
-ir::Instruction* IRGenVisitor::CreateEntryBlockAlloca(ir::Type* type) {
-    if (!ctx_.current_function || !type || !ctx_.builder) {
-        return nullptr;
-    }
-    const auto& blocks = ctx_.current_function->GetBlocks();
-    if (blocks.empty()) {
-        return nullptr;
-    }
-    ir::BasicBlock* entry = blocks.front().get();
-    ir::Type* ptr_type = ctx_.types.GetPointerType(type);
-    std::string name = ctx_.builder->GetNextSSAName();
-    auto inst = std::make_unique<ir::AllocaInst>(name, ptr_type, entry);
-    ir::Instruction* result = inst.get();
-    entry->AddInstructionAtFront(std::move(inst));
-    return result;
-}
-
 // -----------------------------------------------------------------------------
 // Implicit type conversion (SysY int/char)
 // -----------------------------------------------------------------------------
-
-ir::Type* IRGenVisitor::GetPointeeType(ir::Value* ptr) const {
-    if (!ptr || !ptr->GetType()) {
-        return nullptr;
-    }
-    auto* pt = dynamic_cast<ir::PointerType*>(ptr->GetType());
-    return pt ? pt->GetPointeeType() : nullptr;
-}
 
 ir::Value* IRGenVisitor::PromoteToI32(ir::Value* v) {
     if (!v || !ctx_.builder->GetInsertBlock()) {
@@ -243,247 +220,129 @@ ir::ConstantInt* IRGenVisitor::BuildConstScalarInit(int val) const {
                static_cast<ir::ConstantInt*>(ctx_.module->GetInt32Constant(val));
 }
 
-ir::ConstantArray* IRGenVisitor::BuildConstArrayInit(ir::ArrayType* arr_ty,
-                                                     const std::vector<int>& values) const {
-    std::vector<ir::Constant*> inits;
-    for (int v : values) {
-        inits.push_back(BuildConstScalarInit(v));
-    }
-    return ctx_.module->CreateConstantArray(arr_ty, inits);
-}
-
 void IRGenVisitor::EmitGlobalConstDef(ConstDef& const_def, ir::Type* elem_type) {
     const bool kIsArray = const_def.array_size.has_value() && const_def.array_size->get();
-    ir::Type* var_type = nullptr;
-    ir::Constant* init = nullptr;
+    int size = kIsArray ? EvalArraySizeFromConstExp(const_def.array_size->get()) : 0;
 
+    // Collect compile-time init values from AST.
+    std::vector<int> init_vals;
     if (kIsArray) {
-        int n = EvalArraySizeFromConstExp(const_def.array_size->get());
-        ir::ArrayType* arr_ty = ctx_.types.GetArrayType(elem_type, static_cast<unsigned>(n));
-        var_type = arr_ty;
-
-        std::vector<int> values;
         auto* list = std::get_if<ConstInitVal::ExpList>(&const_def.const_init_val->value);
         if (list) {
             for (auto& cexp : *list) {
-                values.push_back(irgen::EvalConstInt(cexp->inner.get()));
+                init_vals.push_back(irgen::EvalConstInt(cexp->inner.get()));
             }
         }
         auto* str = std::get_if<ConstInitVal::StringVal>(&const_def.const_init_val->value);
         if (str) {
             for (unsigned char c : *str) {
-                values.push_back(static_cast<int>(c));
+                init_vals.push_back(static_cast<int>(c));
             }
-            values.push_back(0);
+            init_vals.push_back(0);
         }
-        while (static_cast<int>(values.size()) < n) {
-            values.push_back(0);
-        }
-        init = BuildConstArrayInit(arr_ty, values);
     } else {
-        var_type = elem_type;
         int val = 0;
         auto* single = std::get_if<ConstInitVal::SingleExp>(&const_def.const_init_val->value);
         if (single && single->get()) {
             val = irgen::EvalConstInt((*single)->inner.get());
         }
-        init = BuildConstScalarInit(val);
+        init_vals.push_back(val);
     }
 
-    ir::Type* global_type = ctx_.types.GetPointerType(var_type);
-    ir::GlobalVar* gv = ctx_.module->CreateGlobalVar(const_def.ident, global_type, init, true);
-    ctx_.RegisterVariable(const_def.ident, gv);
+    decl_emitter_.EmitGlobal(const_def.ident, elem_type, size, init_vals, true);
 }
 
 void IRGenVisitor::EmitLocalConstDef(ConstDef& const_def, ir::Type* elem_type) {
     const bool kIsArray = const_def.array_size.has_value() && const_def.array_size->get();
+    int size = kIsArray ? EvalArraySizeFromConstExp(const_def.array_size->get()) : 0;
+
+    ir::Value* alloca_ptr = decl_emitter_.EmitLocalAlloca(const_def.ident, elem_type, size);
+    ctx_.RegisterVariable(const_def.ident, alloca_ptr);
 
     if (kIsArray) {
-        int n = EvalArraySizeFromConstExp(const_def.array_size->get());
-        ir::ArrayType* arr_ty = ctx_.types.GetArrayType(elem_type, static_cast<unsigned>(n));
-        ir::Instruction* alloca = CreateEntryBlockAlloca(arr_ty);
-        ctx_.RegisterVariable(const_def.ident, alloca);
-
         auto* list = std::get_if<ConstInitVal::ExpList>(&const_def.const_init_val->value);
-        if (list && ctx_.builder->GetInsertBlock()) {
-            for (size_t i = 0; i < list->size() && i < static_cast<size_t>(n); ++i) {
-                int val = irgen::EvalConstInt((*list)[i]->inner.get());
-                ir::Value* to_store = BuildConstScalarInit(val);
-                ir::Value* idx = ctx_.module->GetInt32Constant(static_cast<int64_t>(i));
-                ir::Instruction* gep =
-                    ctx_.builder->CreateGEP(ctx_.types.GetPointerType(elem_type), alloca,
-                                            ctx_.module->GetInt32Constant(0), idx);
-                if (gep && to_store) {
-                    ctx_.builder->CreateStore(to_store, gep);
-                }
+        if (list) {
+            std::vector<ir::Value*> vals;
+            vals.reserve(list->size());
+            for (auto& cexp : *list) {
+                vals.push_back(BuildConstScalarInit(irgen::EvalConstInt(cexp->inner.get())));
             }
-        } else {
-            auto* str = std::get_if<ConstInitVal::StringVal>(&const_def.const_init_val->value);
-            if (str && ctx_.builder->GetInsertBlock()) {
-                ir::Value* global_str = EmitGlobalStringLiteral(*str);
-                ir::Type* i8 = ctx_.types.GetI8Type();
-                size_t copy_len =
-                    static_cast<size_t>(std::min(n, static_cast<int>(str->size()) + 1));
-                for (size_t i = 0; i < copy_len; ++i) {
-                    ir::Value* idx = ctx_.module->GetInt32Constant(static_cast<int64_t>(i));
-                    ir::Instruction* src_gep =
-                        ctx_.builder->CreateGEP(ctx_.types.GetPointerType(i8), global_str,
-                                                ctx_.module->GetInt32Constant(0), idx);
-                    if (!src_gep) {
-                        continue;
-                    }
-                    ir::Instruction* load = ctx_.builder->CreateLoad(src_gep);
-                    if (!load) {
-                        continue;
-                    }
-                    ir::Instruction* dst_gep =
-                        ctx_.builder->CreateGEP(ctx_.types.GetPointerType(elem_type), alloca,
-                                                ctx_.module->GetInt32Constant(0), idx);
-                    if (dst_gep) {
-                        ctx_.builder->CreateStore(load, dst_gep);
-                    }
-                }
-                for (size_t i = copy_len; i < static_cast<size_t>(n); ++i) {
-                    ir::Value* idx = ctx_.module->GetInt32Constant(static_cast<int64_t>(i));
-                    ir::Instruction* dst_gep =
-                        ctx_.builder->CreateGEP(ctx_.types.GetPointerType(elem_type), alloca,
-                                                ctx_.module->GetInt32Constant(0), idx);
-                    if (dst_gep) {
-                        ctx_.builder->CreateStore(ctx_.module->GetInt8Constant(0), dst_gep);
-                    }
-                }
-            }
+            decl_emitter_.EmitLocalArrayInit(alloca_ptr, elem_type, size, vals);
+        }
+        auto* str = std::get_if<ConstInitVal::StringVal>(&const_def.const_init_val->value);
+        if (str) {
+            decl_emitter_.EmitLocalStringInit(alloca_ptr, elem_type, size, *str);
         }
     } else {
-        ir::Instruction* alloca = CreateEntryBlockAlloca(elem_type);
-        ctx_.RegisterVariable(const_def.ident, alloca);
-
-        int val = 0;
         auto* single = std::get_if<ConstInitVal::SingleExp>(&const_def.const_init_val->value);
         if (single && single->get() && ctx_.builder->GetInsertBlock()) {
-            val = irgen::EvalConstInt((*single)->inner.get());
-            ctx_.builder->CreateStore(BuildConstScalarInit(val), alloca);
+            int val = irgen::EvalConstInt((*single)->inner.get());
+            ctx_.builder->CreateStore(BuildConstScalarInit(val), alloca_ptr);
         }
     }
 }
 
 void IRGenVisitor::EmitGlobalVarDef(VarDef& var_def, ir::Type* elem_type) {
     const bool kIsArray = var_def.array_size.has_value() && var_def.array_size->get();
-    ir::Type* var_type = nullptr;
-    ir::Constant* init = nullptr;
+    int size = kIsArray ? EvalArraySizeFromConstExp(var_def.array_size->get()) : 0;
 
-    if (kIsArray) {
-        int n = EvalArraySizeFromConstExp(var_def.array_size->get());
-        ir::ArrayType* arr_ty = ctx_.types.GetArrayType(elem_type, static_cast<unsigned>(n));
-        var_type = arr_ty;
-
-        std::vector<int> values;
-        if (var_def.init_val) {
+    // Collect compile-time init values from AST (empty if no initializer → zeroinitializer).
+    std::vector<int> init_vals;
+    if (var_def.init_val) {
+        if (kIsArray) {
             auto* list = std::get_if<InitVal::ExpList>(&var_def.init_val->value);
             if (list) {
                 for (auto& e : *list) {
-                    values.push_back(irgen::EvalConstInt(e.get()));
+                    init_vals.push_back(irgen::EvalConstInt(e.get()));
                 }
             }
             auto* str = std::get_if<InitVal::StringVal>(&var_def.init_val->value);
             if (str) {
                 for (unsigned char c : *str) {
-                    values.push_back(static_cast<int>(c));
+                    init_vals.push_back(static_cast<int>(c));
                 }
             }
-            while (static_cast<int>(values.size()) < n) {
-                values.push_back(0);
-            }
-            init = BuildConstArrayInit(arr_ty, values);
-        }
-    } else {
-        var_type = elem_type;
-        if (var_def.init_val) {
+        } else {
             auto* single = std::get_if<InitVal::SingleExp>(&var_def.init_val->value);
             int val = 0;
             if (single && single->get()) {
                 val = irgen::EvalConstInt(single->get());
             }
-            init = BuildConstScalarInit(val);
+            init_vals.push_back(val);
         }
     }
 
-    ir::Type* global_type = ctx_.types.GetPointerType(var_type);
-    ir::GlobalVar* gv = ctx_.module->CreateGlobalVar(var_def.ident, global_type, init, false);
-    ctx_.RegisterVariable(var_def.ident, gv);
+    decl_emitter_.EmitGlobal(var_def.ident, elem_type, size, init_vals, false);
 }
 
 void IRGenVisitor::EmitLocalVarDef(VarDef& var_def, ir::Type* elem_type) {
     const bool kIsArray = var_def.array_size.has_value() && var_def.array_size->get();
+    int size = kIsArray ? EvalArraySizeFromConstExp(var_def.array_size->get()) : 0;
+
+    ir::Value* alloca_ptr = decl_emitter_.EmitLocalAlloca(var_def.ident, elem_type, size);
+    ctx_.RegisterVariable(var_def.ident, alloca_ptr);
 
     if (kIsArray) {
-        int n = 1;
-        if (var_def.array_size && var_def.array_size->get()) {
-            n = EvalArraySizeFromConstExp(var_def.array_size->get());
-        }
-        ir::ArrayType* arr_ty = ctx_.types.GetArrayType(elem_type, static_cast<unsigned>(n));
-        ir::Instruction* alloca = CreateEntryBlockAlloca(arr_ty);
-        ctx_.RegisterVariable(var_def.ident, alloca);
-
         if (var_def.init_val && ctx_.builder->GetInsertBlock()) {
             auto* list = std::get_if<InitVal::ExpList>(&var_def.init_val->value);
             if (list) {
-                for (size_t i = 0; i < list->size() && i < static_cast<size_t>(n); ++i) {
-                    (*list)[i]->Accept(*this);
-                    ir::Value* val = temp_value_;
-                    if (val) {
-                        val = ConvertToTargetType(val, elem_type);
-                        ir::Value* idx = ctx_.module->GetInt32Constant(static_cast<int64_t>(i));
-                        ir::Instruction* gep =
-                            ctx_.builder->CreateGEP(ctx_.types.GetPointerType(elem_type), alloca,
-                                                    ctx_.module->GetInt32Constant(0), idx);
-                        if (gep) {
-                            ctx_.builder->CreateStore(val, gep);
-                        }
-                    }
+                // Visitor traverses AST to collect runtime values.
+                std::vector<ir::Value*> vals;
+                vals.reserve(list->size());
+                for (auto& exp : *list) {
+                    exp->Accept(*this);
+                    ir::Value* v =
+                        temp_value_ ? ConvertToTargetType(temp_value_, elem_type) : nullptr;
+                    vals.push_back(v);
                 }
-            } else {
-                auto* str = std::get_if<InitVal::StringVal>(&var_def.init_val->value);
-                if (str) {
-                    ir::Value* global_str = EmitGlobalStringLiteral(*str);
-                    ir::Type* i8 = ctx_.types.GetI8Type();
-                    size_t copy_len =
-                        static_cast<size_t>(std::min(n, static_cast<int>(str->size()) + 1));
-                    for (size_t i = 0; i < copy_len; ++i) {
-                        ir::Value* idx = ctx_.module->GetInt32Constant(static_cast<int64_t>(i));
-                        ir::Instruction* src_gep =
-                            ctx_.builder->CreateGEP(ctx_.types.GetPointerType(i8), global_str,
-                                                    ctx_.module->GetInt32Constant(0), idx);
-                        if (!src_gep) {
-                            continue;
-                        }
-                        ir::Instruction* load = ctx_.builder->CreateLoad(src_gep);
-                        if (!load) {
-                            continue;
-                        }
-                        ir::Instruction* dst_gep =
-                            ctx_.builder->CreateGEP(ctx_.types.GetPointerType(elem_type), alloca,
-                                                    ctx_.module->GetInt32Constant(0), idx);
-                        if (dst_gep) {
-                            ctx_.builder->CreateStore(load, dst_gep);
-                        }
-                    }
-                    for (size_t i = copy_len; i < static_cast<size_t>(n); ++i) {
-                        ir::Value* idx = ctx_.module->GetInt32Constant(static_cast<int64_t>(i));
-                        ir::Instruction* dst_gep =
-                            ctx_.builder->CreateGEP(ctx_.types.GetPointerType(elem_type), alloca,
-                                                    ctx_.module->GetInt32Constant(0), idx);
-                        if (dst_gep) {
-                            ctx_.builder->CreateStore(ctx_.module->GetInt8Constant(0), dst_gep);
-                        }
-                    }
-                }
+                decl_emitter_.EmitLocalArrayInit(alloca_ptr, elem_type, size, vals);
+            }
+            auto* str = std::get_if<InitVal::StringVal>(&var_def.init_val->value);
+            if (str) {
+                decl_emitter_.EmitLocalStringInit(alloca_ptr, elem_type, size, *str);
             }
         }
     } else {
-        ir::Instruction* alloca = CreateEntryBlockAlloca(elem_type);
-        ctx_.RegisterVariable(var_def.ident, alloca);
-
         if (var_def.init_val && ctx_.builder->GetInsertBlock()) {
             auto* single = std::get_if<InitVal::SingleExp>(&var_def.init_val->value);
             if (single && single->get()) {
@@ -491,24 +350,130 @@ void IRGenVisitor::EmitLocalVarDef(VarDef& var_def, ir::Type* elem_type) {
                 ir::Value* val =
                     temp_value_ ? ConvertToTargetType(temp_value_, elem_type) : nullptr;
                 if (val) {
-                    ctx_.builder->CreateStore(val, alloca);
+                    ctx_.builder->CreateStore(val, alloca_ptr);
                 }
             }
         }
     }
 }
 
-ir::Value* IRGenVisitor::EmitGlobalStringLiteral(const std::string& str) {
-    std::vector<ir::Constant*> inits;
-    for (unsigned char c : str) {
-        inits.push_back(ctx_.module->GetInt8Constant(static_cast<int64_t>(c)));
+// =============================================================================
+// CompUnit and declaration dispatch (merged from IRGenVisitorDecl.cpp)
+// =============================================================================
+
+void IRGenVisitor::VisitCompUnit(CompUnit& comp_unit) {
+    is_global_ = true;
+    for (auto& d : comp_unit.decls) {
+        d->Accept(*this);
     }
-    inits.push_back(ctx_.module->GetInt8Constant(0));
-    ir::Type* i8 = ctx_.types.GetI8Type();
-    ir::ArrayType* arr_ty = ctx_.types.GetArrayType(i8, static_cast<unsigned>(inits.size()));
-    ir::Constant* init = ctx_.module->CreateConstantArray(arr_ty, inits);
-    std::string name = ".str." + std::to_string(printf_str_counter_++);
-    ir::GlobalVar* gv =
-        ctx_.module->CreateGlobalVar(name, ctx_.types.GetPointerType(arr_ty), init, true);
-    return gv;
+    is_global_ = false;
+    for (auto& f : comp_unit.func_defs) {
+        f->Accept(*this);
+    }
+    if (comp_unit.main_func_def) {
+        comp_unit.main_func_def->Accept(*this);
+    }
+}
+
+void IRGenVisitor::VisitConstDecl(ConstDecl& const_decl) {
+    current_decl_btype_ = const_decl.btype;
+    for (auto& def : const_decl.const_defs) {
+        def->Accept(*this);
+    }
+}
+
+void IRGenVisitor::VisitVarDecl(VarDecl& var_decl) {
+    current_decl_btype_ = var_decl.btype;
+    for (auto& def : var_decl.var_defs) {
+        def->Accept(*this);
+    }
+}
+
+void IRGenVisitor::VisitConstDef(ConstDef& const_def) {
+    ir::Type* elem_type = GetCurDeclType();
+    if (is_global_) {
+        EmitGlobalConstDef(const_def, elem_type);
+    } else {
+        EmitLocalConstDef(const_def, elem_type);
+    }
+}
+
+void IRGenVisitor::VisitVarDef(VarDef& var_def) {
+    ir::Type* elem_type = GetCurDeclType();
+    if (is_global_) {
+        EmitGlobalVarDef(var_def, elem_type);
+    } else {
+        EmitLocalVarDef(var_def, elem_type);
+    }
+}
+
+void IRGenVisitor::VisitConstInitVal(ConstInitVal& const_init_val) {
+    (void)const_init_val;
+}
+
+void IRGenVisitor::VisitInitVal(InitVal& init_val) {
+    (void)init_val;
+}
+
+// =============================================================================
+// Function definitions (merged from IRGenVisitorFunc.cpp)
+// =============================================================================
+
+void IRGenVisitor::VisitFuncDef(FuncDef& func_def) {
+    ir::Type* return_type = irgen::BTypeToReturnType(func_def.func_type);
+    std::vector<ir::Type*> param_types;
+    for (const auto& p : func_def.func_f_params) {
+        param_types.push_back(irgen::BTypeToParamType(p->btype, p->is_array));
+    }
+    ir::Function* func = ctx_.module->CreateFunction(func_def.ident, return_type, param_types);
+    ctx_.current_function = func;
+    IRScopeGuard scope_guard(ctx_);
+
+    ir::BasicBlock* entry = CreateBasicBlock("entry");
+    ctx_.builder->SetInsertPoint(entry);
+    ctx_.builder->ResetSSACounter(static_cast<int>(func_def.func_f_params.size()));
+
+    for (size_t i = 0; i < func_def.func_f_params.size(); ++i) {
+        const auto& p = func_def.func_f_params[i];
+        ir::Value* arg_val = func->GetArgument(i);
+        if (!arg_val) {
+            continue;
+        }
+        if (p->is_array) {
+            ctx_.RegisterVariable(p->ident, arg_val);
+        } else {
+            ir::Type* alloc_ty = irgen::BTypeToAllocaType(p->btype);
+            ir::Value* alloca_inst = decl_emitter_.EmitLocalAlloca("", alloc_ty, 0);
+            if (alloca_inst && ctx_.builder->GetInsertBlock()) {
+                ctx_.builder->CreateStore(arg_val, alloca_inst);
+                ctx_.RegisterVariable(p->ident, alloca_inst);
+            }
+        }
+    }
+
+    func_def.block->Accept(*this);
+
+    if (func_def.func_type == BType::VOID && !IsBlockTerminated()) {
+        ctx_.builder->CreateRetVoid();
+    }
+}
+
+void IRGenVisitor::VisitMainFuncDef(MainFuncDef& main_func_def) {
+    ir::Function* func = ctx_.module->CreateFunction("main", ctx_.types.GetI32Type(), {});
+    ctx_.current_function = func;
+    IRScopeGuard scope_guard(ctx_);
+
+    ir::BasicBlock* entry = CreateBasicBlock("entry");
+    ctx_.builder->SetInsertPoint(entry);
+    ctx_.builder->ResetSSACounter(0);
+
+    main_func_def.block->Accept(*this);
+
+    if (!IsBlockTerminated()) {
+        ctx_.builder->CreateRet(ctx_.module->GetInt32Constant(0));
+    }
+}
+
+void IRGenVisitor::VisitFuncFParam(FuncFParam& func_f_param) {
+    (void)func_f_param;
 }

@@ -11,9 +11,9 @@
 #include "AST.h"
 #include "ASTVisitor.h"
 #include "IRGenContext.h"
-#include "ir/Function.h"
 #include "ir/Module.h"
 #include "ir/TypeManager.h"
+#include "irgen/IRDeclEmitter.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -76,6 +76,9 @@ private:
 
     IRGenContext ctx_;
 
+    /** Emitter for global/local variable creation, array init, string literals. */
+    IRDeclEmitter decl_emitter_;
+
     // -------------------------------------------------------------------------
     // Traversal state (MUST stay in IRGenVisitor, not in Context)
     // -------------------------------------------------------------------------
@@ -126,9 +129,6 @@ private:
      */
     std::vector<ir::Value*> call_args_;
 
-    /** Counter for unique .str.N names in printf string literals. */
-    int printf_str_counter_ = 0;
-
     // -------------------------------------------------------------------------
     // Helper methods
     // -------------------------------------------------------------------------
@@ -163,15 +163,9 @@ private:
      */
     void EmitShortCircuitOR(Exp* lhs, Exp* rhs);
 
-    /** @brief Create alloca in entry block; name is next SSA number from ctx_.builder. */
-    ir::Instruction* CreateEntryBlockAlloca(ir::Type* type);
-
     // -------------------------------------------------------------------------
     // Implicit type conversion (SysY int/char; see docs/ai_collab_notes/type_conversion.md)
     // -------------------------------------------------------------------------
-
-    /** @brief Get pointee type of a pointer Value*, or nullptr if not a pointer. */
-    ir::Type* GetPointeeType(ir::Value* ptr) const;
 
     /**
      * @brief Promote value to i32 for arithmetic/condition. If already i32/i1, return as-is; if i8,
@@ -198,18 +192,20 @@ private:
     /** Build a constant scalar initializer (i32 or i8 constant). */
     ir::ConstantInt* BuildConstScalarInit(int val) const;
 
-    /** Build a constant array initializer from a list of integer values. */
-    ir::ConstantArray* BuildConstArrayInit(ir::ArrayType* arr_ty,
-                                           const std::vector<int>& values) const;
-
     void EmitGlobalConstDef(ConstDef& const_def, ir::Type* elem_type);
     void EmitLocalConstDef(ConstDef& const_def, ir::Type* elem_type);
     void EmitGlobalVarDef(VarDef& var_def, ir::Type* elem_type);
     void EmitLocalVarDef(VarDef& var_def, ir::Type* elem_type);
-
-    /**
-     * @brief Create a global constant string (i8 array, null-terminated) for printf; returns
-     * pointer Value* to pass to putstr. Uses printf_str_counter_ for unique names.
-     */
-    ir::Value* EmitGlobalStringLiteral(const std::string& str);
 };
+
+// ---------------------------------------------------------------------------
+// Null-safe pointee type extraction (used by Stmt/Expr for store target type).
+// Free function: does not access any IRGenVisitor member state.
+// ---------------------------------------------------------------------------
+inline ir::Type* GetPointeeType(ir::Value* ptr) {
+    if (!ptr || !ptr->GetType()) {
+        return nullptr;
+    }
+    auto* pt = dynamic_cast<ir::PointerType*>(ptr->GetType());
+    return pt ? pt->GetPointeeType() : nullptr;
+}
