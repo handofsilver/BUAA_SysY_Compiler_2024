@@ -15,9 +15,7 @@
 
 void IRGenVisitor::VisitLVal(LVal& lval) {
     ir::Value* value = ctx_.LookupVariable(lval.ident);
-    if (!value) {
-        return;
-    }
+    assert(value);
 
     // scalar lval or array name (no index)
     if (!lval.index.has_value() || !*lval.index) {
@@ -29,7 +27,8 @@ void IRGenVisitor::VisitLVal(LVal& lval) {
                 temp_value_ = value;
             } else {
                 ir::Instruction* load = ctx_.builder->CreateLoad(value);
-                temp_value_ = load ? load : value;
+                assert(load);
+                temp_value_ = load;
             }
         }
         return;
@@ -42,9 +41,8 @@ void IRGenVisitor::VisitLVal(LVal& lval) {
     is_lval_mode_ = is_lval_mode_backup;
 
     ir::Value* index_val = temp_value_;
-    if (!index_val || !ctx_.builder->GetInsertBlock()) {
-        return;
-    }
+    assert(index_val && ctx_.builder->GetInsertBlock());
+
     index_val = PromoteToI32(index_val);
     auto* ptr_ty = dynamic_cast<ir::PointerType*>(value->GetType());
     if (!ptr_ty) {
@@ -62,15 +60,14 @@ void IRGenVisitor::VisitLVal(LVal& lval) {
         elem_ty = pointee;
         gep = ctx_.builder->CreateGEP(ctx_.types.GetPointerType(elem_ty), value, index_val);
     }
-    if (!gep) {
-        temp_value_ = value;
-        return;
-    }
+    assert(gep);
+
     if (is_lval_mode_) {
         temp_value_ = gep;
     } else {
         ir::Instruction* load = ctx_.builder->CreateLoad(gep);
-        temp_value_ = load ? load : gep;
+        assert(load);
+        temp_value_ = load;
     }
 }
 
@@ -98,15 +95,15 @@ void IRGenVisitor::VisitBinaryExp(BinaryExp& binary_exp) {
     ir::Value* lhs = temp_value_;
     binary_exp.rhs->Accept(*this);
     ir::Value* rhs = temp_value_;
-    if (!lhs || !rhs || !ctx_.builder->GetInsertBlock()) {
-        return;
-    }
+    assert(lhs && rhs && ctx_.builder->GetInsertBlock());
+
     std::optional<ir::BinaryOp> bop = irgen::OpTypeToBinaryOp(op);
     if (bop) {
         lhs = PromoteToI32(lhs);
         rhs = PromoteToI32(rhs);
         ir::Instruction* inst = ctx_.builder->CreateBinary(*bop, lhs, rhs);
-        temp_value_ = inst ? inst : temp_value_;
+        assert(inst);
+        temp_value_ = inst;
         return;
     }
     std::optional<ir::IcmpPred> pred = irgen::OpTypeToIcmpPred(op);
@@ -114,20 +111,19 @@ void IRGenVisitor::VisitBinaryExp(BinaryExp& binary_exp) {
         lhs = PromoteToI32(lhs);
         rhs = PromoteToI32(rhs);
         ir::Instruction* cmp = ctx_.builder->CreateIcmp(ctx_.types.GetI1Type(), *pred, lhs, rhs);
-        if (cmp) {
-            ir::Instruction* zext = ctx_.builder->CreateZext(cmp, ctx_.types.GetI32Type());
-            temp_value_ = zext ? zext : cmp;
-        }
+        assert(cmp);
+        ir::Instruction* zext = ctx_.builder->CreateZext(cmp, ctx_.types.GetI32Type());
+        assert(zext);
+        temp_value_ = zext;
         return;
     }
 }
 
 void IRGenVisitor::VisitUnaryExp(UnaryExp& unary_exp) {
     unary_exp.operand->Accept(*this);
+
     ir::Value* operand = temp_value_;
-    if (!operand || !ctx_.builder->GetInsertBlock()) {
-        return;
-    }
+    assert(operand && ctx_.builder->GetInsertBlock());
 
     OpType op = unary_exp.op;
     ir::ConstantInt* zero = ctx_.module->GetInt32Constant(0);
@@ -135,17 +131,18 @@ void IRGenVisitor::VisitUnaryExp(UnaryExp& unary_exp) {
     if (op == OpType::MINU) {
         operand = PromoteToI32(operand);
         ir::Instruction* inst = ctx_.builder->CreateBinary(ir::BinaryOp::SUB, zero, operand);
-        temp_value_ = inst ? inst : temp_value_;
+        assert(inst);
+        temp_value_ = inst;
         return;
     }
     if (op == OpType::NOT) {
         operand = PromoteToI32(operand);
         ir::Instruction* cmp =
             ctx_.builder->CreateIcmp(ctx_.types.GetI1Type(), ir::IcmpPred::EQ, operand, zero);
-        if (cmp) {
-            ir::Instruction* zext = ctx_.builder->CreateZext(cmp, ctx_.types.GetI32Type());
-            temp_value_ = zext ? zext : cmp;
-        }
+        assert(cmp);
+        ir::Instruction* zext = ctx_.builder->CreateZext(cmp, ctx_.types.GetI32Type());
+        assert(zext);
+        temp_value_ = zext;
         return;
     }
 }

@@ -53,7 +53,7 @@ namespace ir {
         assert(type && !elements.empty());
         auto c = std::make_unique<ConstantArray>("", type, elements);
         ConstantArray* p = c.get();
-        other_constants_.push_back(std::move(c));
+        array_constants_.push_back(std::move(c));
         return p;
     }
 

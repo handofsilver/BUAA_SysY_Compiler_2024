@@ -34,9 +34,7 @@ std::unique_ptr<ir::Module> IRGenVisitor::Translate(CompUnit& comp_unit) {
 // -----------------------------------------------------------------------------
 
 ir::BasicBlock* IRGenVisitor::CreateBasicBlock(const std::string& name) {
-    if (!ctx_.current_function || !ctx_.builder) {
-        return nullptr;
-    }
+    assert(ctx_.current_function && ctx_.builder);
     std::string label = (name == "entry") ? name : (name + "." + ctx_.builder->GetNextSSAName());
     auto block = std::make_unique<ir::BasicBlock>(label);
     ir::BasicBlock* ptr = block.get();
@@ -59,9 +57,7 @@ bool IRGenVisitor::IsBlockTerminated() const {
 }
 
 ir::Value* IRGenVisitor::CoerceToI1(ir::Value* cond_val) {
-    if (!cond_val || !ctx_.builder->GetInsertBlock()) {
-        return nullptr;
-    }
+    assert(cond_val && ctx_.builder->GetInsertBlock());
     if (cond_val->GetType() && cond_val->GetType() == ctx_.types.GetI1Type()) {
         return cond_val;
     }
@@ -73,25 +69,18 @@ ir::Value* IRGenVisitor::CoerceToI1(ir::Value* cond_val) {
 
 void IRGenVisitor::EmitShortCircuitAND(Exp* lhs, Exp* rhs) {
     ir::Value* result_slot = decl_emitter_.EmitLocalAlloca("", ctx_.types.GetI32Type(), 0);
-    if (!result_slot || !ctx_.builder->GetInsertBlock()) {
-        return;
-    }
+    assert(result_slot && ctx_.builder->GetInsertBlock());
+
     ir::BasicBlock* true_block = CreateBasicBlock("and.then");
     ir::BasicBlock* false_block = CreateBasicBlock("and.false");
     ir::BasicBlock* merge_block = CreateBasicBlock("and.merge");
-    if (!true_block || !false_block || !merge_block) {
-        return;
-    }
+    assert(true_block && false_block && merge_block);
 
     lhs->Accept(*this);
     ir::Value* cond_val = temp_value_;
-    if (!cond_val) {
-        return;
-    }
+    assert(cond_val);
     ir::Value* cond_i1 = CoerceToI1(cond_val);
-    if (!cond_i1) {
-        return;
-    }
+    assert(cond_i1);
     ctx_.builder->CreateCondBr(cond_i1, true_block, false_block);
 
     ctx_.builder->SetInsertPoint(false_block);
@@ -101,10 +90,10 @@ void IRGenVisitor::EmitShortCircuitAND(Exp* lhs, Exp* rhs) {
     ctx_.builder->SetInsertPoint(true_block);
     rhs->Accept(*this);
     ir::Value* rhs_val = PromoteToI32(temp_value_);
+    assert(rhs_val);
     if (!IsBlockTerminated()) {
-        if (rhs_val) {
-            ctx_.builder->CreateStore(rhs_val, result_slot);
-        }
+        assert(rhs_val);
+        ctx_.builder->CreateStore(rhs_val, result_slot);
         ctx_.builder->CreateBr(merge_block);
     }
 
@@ -115,25 +104,18 @@ void IRGenVisitor::EmitShortCircuitAND(Exp* lhs, Exp* rhs) {
 
 void IRGenVisitor::EmitShortCircuitOR(Exp* lhs, Exp* rhs) {
     ir::Value* result_slot = decl_emitter_.EmitLocalAlloca("", ctx_.types.GetI32Type(), 0);
-    if (!result_slot || !ctx_.builder->GetInsertBlock()) {
-        return;
-    }
+    assert(result_slot && ctx_.builder->GetInsertBlock());
+
     ir::BasicBlock* true_block = CreateBasicBlock("or.then");
     ir::BasicBlock* rhs_block = CreateBasicBlock("or.rhs");
     ir::BasicBlock* merge_block = CreateBasicBlock("or.merge");
-    if (!true_block || !rhs_block || !merge_block) {
-        return;
-    }
+    assert(true_block && rhs_block && merge_block);
 
     lhs->Accept(*this);
     ir::Value* cond_val = temp_value_;
-    if (!cond_val) {
-        return;
-    }
+    assert(cond_val);
     ir::Value* cond_i1 = CoerceToI1(cond_val);
-    if (!cond_i1) {
-        return;
-    }
+    assert(cond_i1);
     ctx_.builder->CreateCondBr(cond_i1, true_block, rhs_block);
 
     ctx_.builder->SetInsertPoint(true_block);
@@ -144,9 +126,8 @@ void IRGenVisitor::EmitShortCircuitOR(Exp* lhs, Exp* rhs) {
     rhs->Accept(*this);
     ir::Value* rhs_val = PromoteToI32(temp_value_);
     if (!IsBlockTerminated()) {
-        if (rhs_val) {
-            ctx_.builder->CreateStore(rhs_val, result_slot);
-        }
+        assert(rhs_val);
+        ctx_.builder->CreateStore(rhs_val, result_slot);
         ctx_.builder->CreateBr(merge_block);
     }
 
@@ -160,12 +141,10 @@ void IRGenVisitor::EmitShortCircuitOR(Exp* lhs, Exp* rhs) {
 // -----------------------------------------------------------------------------
 
 ir::Value* IRGenVisitor::PromoteToI32(ir::Value* v) {
-    if (!v || !ctx_.builder->GetInsertBlock()) {
-        return v;
-    }
+    assert(v && ctx_.builder->GetInsertBlock());
     ir::Type* ty = v->GetType();
     auto* int_ty = dynamic_cast<ir::IntegerType*>(ty);
-    if (!int_ty || int_ty->GetBits() != 8) {
+    if (!int_ty || int_ty == ctx_.types.GetI32Type()) {
         return v;
     }
     ir::Instruction* z = ctx_.builder->CreateZext(v, ctx_.types.GetI32Type());
@@ -173,14 +152,14 @@ ir::Value* IRGenVisitor::PromoteToI32(ir::Value* v) {
 }
 
 ir::Value* IRGenVisitor::ConvertToTargetType(ir::Value* v, ir::Type* target_ty) {
-    if (!v || !target_ty || !ctx_.builder->GetInsertBlock()) {
-        return v;
-    }
+    assert(v && target_ty && ctx_.builder->GetInsertBlock());
+
     auto* target_int = dynamic_cast<ir::IntegerType*>(target_ty);
     auto* val_int = dynamic_cast<ir::IntegerType*>(v->GetType());
     if (!target_int || !val_int) {
         return v;
     }
+
     unsigned target_bits = target_int->GetBits();
     unsigned val_bits = val_int->GetBits();
     if (target_bits == val_bits) {

@@ -128,7 +128,7 @@ namespace ir {
         std::vector<std::unique_ptr<ConstantInt>> constants_;
         std::unordered_map<int64_t, ConstantInt*> const_i32_cache_;
         std::unordered_map<int64_t, ConstantInt*> const_i8_cache_;
-        std::vector<std::unique_ptr<Constant>> other_constants_;
+        std::vector<std::unique_ptr<Constant>> array_constants_;
     };
 
 } // namespace ir

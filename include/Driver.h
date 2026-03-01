@@ -26,9 +26,9 @@ struct CompilerResult {
     std::vector<std::pair<int, std::string>> errors;
     std::unique_ptr<CompUnit> comp_unit;
     std::unique_ptr<SemanticAnalyzer> analyzer;
-    std::string lexer_output;   /** Filled when emit_lexer_output was true (requirement_1). */
+    std::string lexer_output;  /** Filled when emit_lexer_output was true (requirement_1). */
     std::string parser_output; /** Filled when emit_parser_output was true (requirement_2). */
-    std::string symbol_output;  /** Filled when emit_symbol_output was true (requirement_3). */
+    std::string symbol_output; /** Filled when emit_symbol_output was true (requirement_3). */
     std::unique_ptr<ir::Module> module;
 };
 
@@ -36,6 +36,7 @@ struct CompilerResult {
  * \p emit_lexer_output: collect token lines for lexer.txt (requirement_1).
  * \p emit_parser_output: collect token + syntax lines for parser.txt (requirement_2).
  * \p emit_symbol_output: collect symbol table lines for symbol.txt (requirement_3).
- * Caller only does file I/O: write error.txt / lexer.txt / parser.txt / symbol.txt / llvm_ir.txt from result. */
+ * Caller only does file I/O: write error.txt / lexer.txt / parser.txt / symbol.txt / llvm_ir.txt
+ * from result. */
 CompilerResult RunCompiler(const std::string& source, bool emit_lexer_output = true,
                            bool emit_parser_output = true, bool emit_symbol_output = false);

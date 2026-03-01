@@ -49,7 +49,7 @@
 | **词法分析**    | `lexer`    | ✅ 已完成 | Token 识别与错误处理，输出 `output.txt` / `error.txt`。                    |
 | **语法分析**    | `parser`   | ✅ 已完成 | 递归下降 + AST，输出 `parser.txt` / `error.txt`。                         |
 | **语义/符号表** | `analyzer` | ✅ 已完成 | 符号表、作用域（RAII）、Visitor 遍历；输出 `symbol.txt` / `error.txt`。   |
-| **中间代码**    | `ir`       | ⏳ 待开发 | LLVM IR 生成。                                                           |
+| **中间代码**    | `ir`       | ✅ 已完成 | 基于内存的 IR 树形结构（Value/User）、IRBuilder 模式生成，输出 `llvm_ir.txt`。|
 | **目标代码**    | `backend`  | ⏳ 待开发 | **本次重构核心目标**：MIPS 生成 + 寄存器分配优化。                         |
 
 ------
@@ -94,45 +94,50 @@
 
 程序读取 `testfile.txt`，运行 **Lexer + Parser**；若启用 Parser 输出则生成 `parser.txt`（正确时）或参与合并写 `error.txt`（词法 a 类、语法 i/j/k 类等）。详见 [第二次实验要求](docs/course_info/requirement_2_parser.md)。
 
-### 3. 项目结构（含语义分析）
+### 3. 项目结构（含中间代码）
 
-当前主流程为 **Lexer → Parser → SemanticAnalyzer**；输出以**语义分析**为准：无错误时写 `symbol.txt`，有错误时合并三阶段错误写 `error.txt`。
+当前主流程为 **Lexer → Parser → SemanticAnalyzer → IRGenVisitor**；输出以**中间代码**为准：无错误时写 `llvm_ir.txt`，有错误时合并之前阶段错误写 `error.txt`。
 
 ```Plaintext
 .
 ├── CMakeLists.txt
 ├── src/
-│   ├── main.cpp            # 入口：读 testfile.txt，Lexer → Parser → SemanticAnalyzer，写 symbol.txt / error.txt
+│   ├── main.cpp            # 入口：读 testfile.txt，执行至 IR 生成，写 llvm_ir.txt / error.txt
 │   ├── Lexer.cpp
 │   ├── parser.cpp          # 递归下降 + AST 构造
-│   ├── SemanticAnalyzer.cpp # 语义分析 Visitor：符号表、作用域、错误 b/c/d/e/f/g/h/l/m
+│   ├── SemanticAnalyzer.cpp # 语义分析 Visitor：符号表、作用域、错误检查
 │   ├── SymbolTable.cpp    # 作用域栈、Lookup/Register
-│   ├── Symbol.cpp          # Symbol 类型与 FormatForOutput
-│   ├── ScopeGuard.cpp      # RAII 作用域守卫
-│   └── TokenType.cpp
+│   ├── ir/                 # IR 基础数据结构
+│   │   ├── BasicBlock.cpp
+│   │   ├── Constant.cpp
+│   │   ├── Function.cpp
+│   │   ├── Instruction.cpp
+│   │   ├── Module.cpp
+│   │   ├── Type.cpp
+│   │   ├── User.cpp
+│   │   ├── Value.cpp
+│   │   └── IRPrintContext.cpp
+│   └── irgen/              # IR 生成与转换
+│       ├── IRBuilder.cpp
+│       ├── IRDeclEmitter.cpp
+│       ├── IRGenContext.cpp
+│       └── IRGenVisitor.cpp # 各类表达式、语句的 Visit 生成逻辑
 ├── include/
 │   ├── Lexer.h
 │   ├── Parser.h
-│   ├── AST.h               # AST 节点与 Accept(Visitor)
-│   ├── ASTVisitor.h        # Visitor 接口
-│   ├── SemanticAnalyzer.h  # 语义分析 Visitor 实现
+│   ├── AST.h              # AST 节点与 Accept(Visitor)
+│   ├── ASTVisitor.h       # Visitor 接口
+│   ├── SemanticAnalyzer.h # 语义分析 Visitor 实现
 │   ├── SymbolTable.h
-│   ├── Symbol.h
-│   ├── ScopeGuard.h
-│   ├── Token.h
-│   └── TokenType.h
+│   ├── ir/                # IR 定义头文件
+│   └── irgen/             # IR 生成相关头文件
 └── docs/
     ├── course_info/
-    │   ├── 2024_SysY_grammar.md
-    │   ├── 2024_SysY_detailed.md
-    │   ├── requirement_1_lexer.md
-    │   ├── requirement_2_parser.md
-    │   ├── requirement_3_analyzer.md
-    │   └── ...
     └── design_documents/
         ├── lexer.md
         ├── parser.md
-        └── semantic_analyzer.md   # 符号表、作用域扁平化、常量折叠、错误检测机制等
+        ├── semantic_analyzer.md
+        └── llvm_ir.md     # LLVM IR 设计与代码生成思路
 ```
 
 ------
@@ -154,6 +159,31 @@
 | **存在错误** | `testfile.txt` | `error.txt`   | `行号 错误类别码`（词法+语法+语义合并，按行号排序）   |
 
 - 规范详见 [第三次实验要求](docs/course_info/requirement_3_analyzer.md)。`main` 不纳入符号表；符号输出可由主控开关控制（便于后续完整编译器关闭 symbol.txt）。
+
+------
+
+## ⚙️ 中间代码生成 (LLVM IR)
+
+### 1. 功能概述
+
+在抽象语法树 (AST) 和符号表的基础上，通过一遍 **Visitor 遍历**，将源程序转换为基于内存的 **LLVM IR** 对象结构（Module, Function, BasicBlock, Instruction 等），并最终将该内存结构序列化为文本格式的 LLVM IR。
+
+- **架构设计**：采用与原生 LLVM 类似的 `Value -> User -> Instruction` 类继承体系。内存所有权明确：`Module` 拥有全局变量和函数，`Function` 拥有基本块，`BasicBlock` 拥有指令。采用 `std::unique_ptr` 管理树形拥有的生命周期，采用裸指针管理引用（操作数）。
+- **生成模式**：
+  - **IRGenVisitor** 继承 `ASTVisitor` 驱动 AST 遍历。
+  - **IRBuilder** 充当工厂类，负责在当前基本块末尾创建并插入指令。
+  - **IRDeclEmitter** 封装繁琐的符号声明逻辑。
+  - **短路求值与控制流**：为 `&&` 和 `||` 实现了精确的短路控制流生成。采用局部变量 (Alloca/Load/Store) 机制代替 Phi 节点来处理短路求值结果及变量赋值，后续将通过 mem2reg 等优化遍消除。
+
+### 2. 输入与输出规范（IR 生成阶段）
+
+| **场景**     | **输入**       | **输出文件**  | **输出内容格式**                                      |
+| ------------ | -------------- | ------------- | ----------------------------------------------------- |
+| **正确源程序** | `testfile.txt` | `llvm_ir.txt` | 纯文本格式的 LLVM IR 代码，包含 `@main` 等函数定义与内部指令。 |
+| **存在错误** | `testfile.txt` | `error.txt`   | `行号 错误类别码`（词法+语法+语义合并，无中间代码生成）。 |
+
+- 规范详见 [第四次与第五次实验要求](docs/course_info/requirement_4_codegen_simple.md)。
+- 本项目保证生成的 LLVM IR 可以使用 `lli` (LLVM Interpreter) 解释执行，具有完整的标准 C 语义。
 
 ------
 

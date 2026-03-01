@@ -55,9 +55,7 @@ void IRGenVisitor::VisitIfStmt(IfStmt& if_stmt) {
 
     if_stmt.cond->Accept(*this);
     ir::Value* cond_i1 = CoerceToI1(temp_value_);
-    if (!cond_i1 || !ctx_.builder->GetInsertBlock()) {
-        return;
-    }
+    assert(cond_i1 && ctx_.builder->GetInsertBlock());
     ctx_.builder->CreateCondBr(cond_i1, true_block, false_block);
 
     ctx_.builder->SetInsertPoint(true_block);
@@ -140,9 +138,8 @@ void IRGenVisitor::VisitForInitOrStep(ForInitOrStep& for_init_or_step) {
     ir::Value* val = temp_value_;
     if (addr && val && ctx_.builder->GetInsertBlock()) {
         ir::Type* target_ty = GetPointeeType(addr);
-        if (target_ty) {
-            val = ConvertToTargetType(val, target_ty);
-        }
+        assert(target_ty);
+        val = ConvertToTargetType(val, target_ty);
         ctx_.builder->CreateStore(val, addr);
     }
 }
@@ -187,11 +184,12 @@ void IRGenVisitor::VisitGetintStmt(GetintStmt& getint_stmt) {
     ir::Value* addr = temp_value_;
     ir::Instruction* call =
         ctx_.builder->CreateCall(ctx_.types.GetI32Type(), ctx_.module->GetFunction("getint"), {});
-    if (addr && call && ctx_.builder->GetInsertBlock()) {
-        ir::Type* target_ty = GetPointeeType(addr);
-        ir::Value* to_store = target_ty ? ConvertToTargetType(call, target_ty) : call;
-        ctx_.builder->CreateStore(to_store, addr);
-    }
+
+    assert(addr && call && ctx_.builder->GetInsertBlock());
+    ir::Type* target_ty = GetPointeeType(addr);
+    assert(target_ty);
+    ir::Value* to_store = ConvertToTargetType(call, target_ty);
+    ctx_.builder->CreateStore(to_store, addr);
 }
 
 void IRGenVisitor::VisitGetcharStmt(GetcharStmt& getchar_stmt) {
@@ -201,11 +199,12 @@ void IRGenVisitor::VisitGetcharStmt(GetcharStmt& getchar_stmt) {
     ir::Value* addr = temp_value_;
     ir::Instruction* call =
         ctx_.builder->CreateCall(ctx_.types.GetI32Type(), ctx_.module->GetFunction("getchar"), {});
-    if (addr && call && ctx_.builder->GetInsertBlock()) {
-        ir::Type* target_ty = GetPointeeType(addr);
-        ir::Value* to_store = target_ty ? ConvertToTargetType(call, target_ty) : call;
-        ctx_.builder->CreateStore(to_store, addr);
-    }
+
+    assert(addr && call && ctx_.builder->GetInsertBlock());
+    ir::Type* target_ty = GetPointeeType(addr);
+    assert(target_ty);
+    ir::Value* to_store = ConvertToTargetType(call, target_ty);
+    ctx_.builder->CreateStore(to_store, addr);
 }
 
 void IRGenVisitor::VisitPrintfStmt(PrintfStmt& printf_stmt) {

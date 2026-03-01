@@ -6,6 +6,7 @@
 #include "ir/Constant.h"
 #include "ir/Instruction.h"
 #include <algorithm>
+#include <cassert>
 
 IRDeclEmitter::IRDeclEmitter(IRGenContext& ctx) : ctx_(ctx) {}
 
@@ -14,13 +15,9 @@ IRDeclEmitter::IRDeclEmitter(IRGenContext& ctx) : ctx_(ctx) {}
 // -----------------------------------------------------------------------------
 
 ir::Instruction* IRDeclEmitter::CreateEntryBlockAlloca(ir::Type* type) {
-    if (!ctx_.current_function || !type || !ctx_.builder) {
-        return nullptr;
-    }
+    assert(ctx_.current_function && type && ctx_.builder);
     const auto& blocks = ctx_.current_function->GetBlocks();
-    if (blocks.empty()) {
-        return nullptr;
-    }
+    assert(!blocks.empty());
     ir::BasicBlock* entry = blocks.front().get();
     ir::Type* ptr_type = ctx_.types.GetPointerType(type);
     std::string name = ctx_.builder->GetNextSSAName();
@@ -109,40 +106,35 @@ ir::Value* IRDeclEmitter::EmitLocalAlloca(const std::string& /*name*/, ir::Type*
 
 void IRDeclEmitter::EmitLocalArrayInit(ir::Value* alloca_ptr, ir::Type* elem_type, int size,
                                        const std::vector<ir::Value*>& init_vals) {
-    if (!ctx_.builder->GetInsertBlock()) {
-        return;
-    }
+    assert(ctx_.builder->GetInsertBlock());
+
     ir::Type* ptr_type = ctx_.types.GetPointerType(elem_type);
     ir::Value* zero = ctx_.module->GetInt32Constant(0);
 
     // Store provided init values via GEP + Store.
     for (size_t i = 0; i < init_vals.size() && static_cast<int>(i) < size; ++i) {
         ir::Value* val = init_vals[i];
-        if (!val) {
-            continue;
-        }
+        assert(val);
+
         ir::Value* idx = ctx_.module->GetInt32Constant(static_cast<int64_t>(i));
         ir::Instruction* gep = ctx_.builder->CreateGEP(ptr_type, alloca_ptr, zero, idx);
-        if (gep) {
-            ctx_.builder->CreateStore(val, gep);
-        }
+        assert(gep);
+        ctx_.builder->CreateStore(val, gep);
     }
 
     // Zero-pad remaining elements.
     for (size_t i = init_vals.size(); i < static_cast<size_t>(size); ++i) {
         ir::Value* idx = ctx_.module->GetInt32Constant(static_cast<int64_t>(i));
         ir::Instruction* gep = ctx_.builder->CreateGEP(ptr_type, alloca_ptr, zero, idx);
-        if (gep) {
-            ctx_.builder->CreateStore(MakeConstInt(elem_type, 0), gep);
-        }
+        assert(gep);
+        ctx_.builder->CreateStore(MakeConstInt(elem_type, 0), gep);
     }
 }
 
 void IRDeclEmitter::EmitLocalStringInit(ir::Value* alloca_ptr, ir::Type* elem_type, int size,
                                         const std::string& str) {
-    if (!ctx_.builder->GetInsertBlock()) {
-        return;
-    }
+    assert(ctx_.builder->GetInsertBlock());
+
     ir::Value* global_str = EmitGlobalStringLiteral(str);
     ir::Type* i8 = ctx_.types.GetI8Type();
     ir::Type* i8_ptr = ctx_.types.GetPointerType(i8);
@@ -154,25 +146,19 @@ void IRDeclEmitter::EmitLocalStringInit(ir::Value* alloca_ptr, ir::Type* elem_ty
     for (size_t i = 0; i < copy_len; ++i) {
         ir::Value* idx = ctx_.module->GetInt32Constant(static_cast<int64_t>(i));
         ir::Instruction* src_gep = ctx_.builder->CreateGEP(i8_ptr, global_str, zero, idx);
-        if (!src_gep) {
-            continue;
-        }
+        assert(src_gep);
         ir::Instruction* load = ctx_.builder->CreateLoad(src_gep);
-        if (!load) {
-            continue;
-        }
+        assert(load);
         ir::Instruction* dst_gep = ctx_.builder->CreateGEP(elem_ptr, alloca_ptr, zero, idx);
-        if (dst_gep) {
-            ctx_.builder->CreateStore(load, dst_gep);
-        }
+        assert(dst_gep);
+        ctx_.builder->CreateStore(load, dst_gep);
     }
 
     // Zero-pad remaining elements.
     for (size_t i = copy_len; i < static_cast<size_t>(size); ++i) {
         ir::Value* idx = ctx_.module->GetInt32Constant(static_cast<int64_t>(i));
         ir::Instruction* dst_gep = ctx_.builder->CreateGEP(elem_ptr, alloca_ptr, zero, idx);
-        if (dst_gep) {
-            ctx_.builder->CreateStore(ctx_.module->GetInt8Constant(0), dst_gep);
-        }
+        assert(dst_gep);
+        ctx_.builder->CreateStore(ctx_.module->GetInt8Constant(0), dst_gep);
     }
 }

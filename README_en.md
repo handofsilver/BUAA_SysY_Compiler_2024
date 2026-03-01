@@ -49,7 +49,7 @@ This README will be dynamically updated to reflect development progress.
 | **Lexical Analysis** | `lexer` | ✅ Completed | Token recognition and error handling; outputs `output.txt` / `error.txt`. |
 | **Syntax Analysis** | `parser` | ✅ Completed | Recursive descent + AST; outputs `parser.txt` / `error.txt`. |
 | **Semantics / Symbol Table** | `analyzer` | ✅ Completed | Symbol table, scopes (RAII), Visitor traversal; outputs `symbol.txt` / `error.txt`. |
-| **Intermediate Code** | `ir` | ⏳ Pending | LLVM IR generation. |
+| **Intermediate Code** | `ir` | ✅ Completed | In-memory IR structure (Value/User), IRBuilder generation, outputs `llvm_ir.txt`. |
 | **Target Code** | `backend` | ⏳ Pending | **Core goal**: MIPS generation + register allocation optimization. |
 
 ------
@@ -94,22 +94,34 @@ Building on the lexer, the parser performs recursive-descent syntax analysis and
 
 When running **Lexer + Parser**, the program reads `testfile.txt`; if parser output is enabled it produces `parser.txt` (on success) or contributes to a merged `error.txt` (lexical type-a, syntax i/j/k, etc.). See [Experiment 2 Requirements](docs/course_info/requirement_2_parser.md).
 
-### 3. Project Structure (including semantic analysis)
+### 3. Project Structure (including intermediate code)
 
-The main pipeline is **Lexer → Parser → SemanticAnalyzer**. Final output is defined by the semantic stage: **no errors** → `symbol.txt`; **any errors** → merged `error.txt` from all three stages.
+The main pipeline is **Lexer → Parser → SemanticAnalyzer → IRGenVisitor**. Final output is defined by the intermediate code stage: **no errors** → `llvm_ir.txt`; **any errors** → merged `error.txt` from all previous stages.
 
 ```Plaintext
 .
 ├── CMakeLists.txt
 ├── src/
-│   ├── main.cpp            # Entry: read testfile.txt, Lexer → Parser → SemanticAnalyzer, write symbol.txt / error.txt
+│   ├── main.cpp            # Entry: read testfile.txt, execute to IR generation, write llvm_ir.txt / error.txt
 │   ├── Lexer.cpp
 │   ├── parser.cpp         # Recursive descent + AST construction
-│   ├── SemanticAnalyzer.cpp # Semantic Visitor: symbol table, scopes, errors b/c/d/e/f/g/h/l/m
+│   ├── SemanticAnalyzer.cpp # Semantic Visitor: symbol table, scopes, errors
 │   ├── SymbolTable.cpp    # Scope stack, Lookup/Register
-│   ├── Symbol.cpp         # Symbol type and FormatForOutput
-│   ├── ScopeGuard.cpp     # RAII scope guard
-│   └── TokenType.cpp
+│   ├── ir/                # Core IR data structures
+│   │   ├── BasicBlock.cpp
+│   │   ├── Constant.cpp
+│   │   ├── Function.cpp
+│   │   ├── Instruction.cpp
+│   │   ├── Module.cpp
+│   │   ├── Type.cpp
+│   │   ├── User.cpp
+│   │   ├── Value.cpp
+│   │   └── IRPrintContext.cpp
+│   └── irgen/             # IR generation and translation
+│       ├── IRBuilder.cpp
+│       ├── IRDeclEmitter.cpp
+│       ├── IRGenContext.cpp
+│       └── IRGenVisitor.cpp # AST traversal and IR emission
 ├── include/
 │   ├── Lexer.h
 │   ├── Parser.h
@@ -117,22 +129,15 @@ The main pipeline is **Lexer → Parser → SemanticAnalyzer**. Final output is 
 │   ├── ASTVisitor.h       # Visitor interface
 │   ├── SemanticAnalyzer.h # Semantic analysis Visitor implementation
 │   ├── SymbolTable.h
-│   ├── Symbol.h
-│   ├── ScopeGuard.h
-│   ├── Token.h
-│   └── TokenType.h
+│   ├── ir/                # IR headers
+│   └── irgen/             # IR generation headers
 └── docs/
     ├── course_info/
-    │   ├── 2024_SysY_grammar.md
-    │   ├── 2024_SysY_detailed.md
-    │   ├── requirement_1_lexer.md
-    │   ├── requirement_2_parser.md
-    │   ├── requirement_3_analyzer.md
-    │   └── ...
     └── design_documents/
         ├── lexer.md
         ├── parser.md
-        └── semantic_analyzer.md   # Symbol table, scope flattening, constant folding, error detection, etc.
+        ├── semantic_analyzer.md
+        └── llvm_ir.md     # LLVM IR design and code generation strategy
 ```
 
 ------
@@ -154,6 +159,31 @@ A single **Visitor** pass over the AST maintains a stack-based symbol table and 
 | **Errors present** | `testfile.txt` | `error.txt` | `LineNumber ErrorCode` (lex + parse + semantic merged, sorted by line) |
 
 See [Experiment 3 Requirements](docs/course_info/requirement_3_analyzer.md). The name `main` is not entered in the symbol table; symbol output can be turned off in the driver for use as a full compiler later.
+
+------
+
+## ⚙️ Intermediate Code Generation (LLVM IR)
+
+### 1. Overview
+
+Building upon the Abstract Syntax Tree (AST) and the symbol table, a single **Visitor pass** converts the source program into an in-memory **LLVM IR** object structure (Module, Function, BasicBlock, Instruction, etc.), which is then serialized into text-format LLVM IR.
+
+- **Architecture Design**: Employs a simplified `Value -> User -> Instruction` class hierarchy inspired by native LLVM. Clear memory ownership: `Module` owns global variables and functions, `Function` owns basic blocks, and `BasicBlock` owns instructions using `std::unique_ptr`. Raw pointers are used for references (operands).
+- **Generation Patterns**:
+  - **IRGenVisitor** extends `ASTVisitor` to drive the AST traversal.
+  - **IRBuilder** acts as a factory class, creating and inserting instructions at the current basic block.
+  - **IRDeclEmitter** encapsulates verbose symbol declaration logic.
+  - **Short-circuit Evaluation & Control Flow**: Implements precise short-circuiting for `&&` and `||`. Local variable memory slots (Alloca/Load/Store) are used instead of Phi nodes to handle evaluation results and assignments, which will be optimized away by future passes like `mem2reg`.
+
+### 2. I/O Specification (IR stage)
+
+| **Scenario** | **Input** | **Output file** | **Output format** |
+| :--- | :--- | :--- | :--- |
+| **Correct source** | `testfile.txt` | `llvm_ir.txt` | Plain text LLVM IR code containing function definitions like `@main` and internal instructions. |
+| **Errors present** | `testfile.txt` | `error.txt` | `LineNumber ErrorCode` (lex + parse + semantic merged; no IR is generated). |
+
+- See the [Experiment 4 & 5 Requirements](docs/course_info/requirement_4_codegen_simple.md).
+- The generated LLVM IR is strictly compliant and can be executed using `lli` (LLVM Interpreter) to verify standard C semantics.
 
 ------
 

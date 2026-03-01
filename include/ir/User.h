@@ -12,6 +12,7 @@
 #include "ir/Use.h"
 #include "ir/Value.h"
 
+#include <cassert>
 #include <vector>
 
 namespace ir {
@@ -38,9 +39,7 @@ namespace ir {
          * @return nullptr if i is out of range.
          */
         Value* GetOperand(int i) const {
-            if (i < 0 || static_cast<size_t>(i) >= operands_.size()) {
-                return nullptr;
-            }
+            assert(i >= 0 && static_cast<size_t>(i) < operands_.size());
             return operands_[static_cast<size_t>(i)].GetValue();
         }
 

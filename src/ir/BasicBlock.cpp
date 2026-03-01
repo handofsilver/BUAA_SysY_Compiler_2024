@@ -7,8 +7,8 @@
  */
 
 #include "ir/BasicBlock.h"
-#include "ir/Instruction.h"
 #include "ir/IRPrintContext.h"
+#include "ir/Instruction.h"
 #include <ostream>
 
 namespace ir {

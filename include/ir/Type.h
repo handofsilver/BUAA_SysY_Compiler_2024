@@ -58,9 +58,6 @@ namespace ir {
         unsigned GetBits() const {
             return bits_;
         }
-        void SetBits(unsigned bits) {
-            bits_ = bits;
-        }
 
         void Print(std::ostream& os) const override;
 
