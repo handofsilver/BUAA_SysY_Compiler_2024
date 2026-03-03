@@ -49,8 +49,103 @@
 | **词法分析**    | `lexer`    | ✅ 已完成 | Token 识别与错误处理，输出 `output.txt` / `error.txt`。                    |
 | **语法分析**    | `parser`   | ✅ 已完成 | 递归下降 + AST，输出 `parser.txt` / `error.txt`。                         |
 | **语义/符号表** | `analyzer` | ✅ 已完成 | 符号表、作用域（RAII）、Visitor 遍历；输出 `symbol.txt` / `error.txt`。   |
-| **中间代码**    | `ir`       | ✅ 已完成 | 基于内存的 IR 树形结构（Value/User）、IRBuilder 模式生成，输出 `llvm_ir.txt`。|
-| **目标代码**    | `backend`  | ⏳ 待开发 | **本次重构核心目标**：MIPS 生成 + 寄存器分配优化。                         |
+| **中间代码**    | `llvm_ir`       | ✅ 已完成 | 基于内存的 IR 树形结构（Value/User）、IRBuilder 模式生成，输出 `llvm_ir.txt`。|
+| **目标代码**    | `mips`  | ⏳ 待开发 | **本次重构核心目标**：MIPS 生成 + 寄存器分配优化。                         |
+
+------
+
+## 📁 项目结构
+
+当前主流程为 **Lexer → Parser → SemanticAnalyzer → IRGenVisitor**；输出以**中间代码**为准：无错误时写 `llvm_ir.txt`，有错误时合并之前阶段错误写 `error.txt`。
+
+```Plaintext
+.
+├── CMakeLists.txt
+├── src/
+│   ├── main.cpp              # 入口：读 testfile.txt，执行至 IR 生成，写 llvm_ir.txt / error.txt
+│   ├── Driver.cpp             # 主控流程
+│   ├── Lexer.cpp
+│   ├── Parser.cpp            # 递归下降 + AST 构造
+│   ├── AST.cpp
+│   ├── TokenType.cpp
+│   ├── SemanticAnalyzer.cpp  # 语义分析 Visitor：符号表、作用域、错误检查
+│   ├── SymbolTable.cpp       # 作用域栈、Lookup/Register
+│   ├── Symbol.cpp
+│   ├── ScopeGuard.cpp
+│   ├── ir/                   # IR 基础数据结构
+│   │   ├── BasicBlock.cpp
+│   │   ├── Constant.cpp
+│   │   ├── Function.cpp
+│   │   ├── Instruction.cpp
+│   │   ├── Module.cpp
+│   │   ├── Type.cpp
+│   │   ├── User.cpp
+│   │   ├── Value.cpp
+│   │   ├── Argument.cpp
+│   │   ├── GlobalVar.cpp
+│   │   ├── TypeManager.cpp
+│   │   └── IRPrintContext.cpp
+│   └── irgen/                # IR 生成与转换
+│       ├── IRDeclEmitter.cpp
+│       ├── IRGenContext.cpp
+│       ├── IRGenVisitor.cpp
+│       ├── IRGenVisitorExpr.cpp
+│       ├── IRGenVisitorStmt.cpp
+│       ├── IRScopeGuard.cpp
+│       ├── TypeMapping.cpp
+│       └── ConstExpEvaluator.cpp
+├── include/
+│   ├── Lexer.h
+│   ├── Token.h
+│   ├── TokenType.h
+│   ├── Parser.h
+│   ├── AST.h                 # AST 节点与 Accept(Visitor)
+│   ├── ASTVisitor.h          # Visitor 接口
+│   ├── Driver.h
+│   ├── SemanticAnalyzer.h    # 语义分析 Visitor 实现
+│   ├── SymbolTable.h
+│   ├── Symbol.h
+│   ├── ScopeGuard.h
+│   ├── ir/                   # IR 定义头文件
+│   │   ├── Value.h
+│   │   ├── User.h
+│   │   ├── Use.h
+│   │   ├── Type.h
+│   │   ├── TypeManager.h
+│   │   ├── Constant.h
+│   │   ├── Instruction.h
+│   │   ├── BasicBlock.h
+│   │   ├── Function.h
+│   │   ├── Argument.h
+│   │   ├── GlobalVar.h
+│   │   ├── Module.h
+│   │   ├── IRBuilder.h
+│   │   └── IRPrintContext.h
+│   └── irgen/                # IR 生成相关头文件
+│       ├── IRGenVisitor.h
+│       ├── IRGenContext.h
+│       ├── IRDeclEmitter.h
+│       ├── IRScopeGuard.h
+│       ├── TypeMapping.h
+│       ├── ConstExpEvaluator.h
+│       └── SSANameAllocator.h
+└── docs/
+    ├── ai_collab_notes/      # AI协作记录
+    ├── course_info/          # 实验要求与课程规范
+    │   ├── requirement_1_lexer.md
+    │   ├── requirement_2_parser.md
+    │   ├── requirement_3_analyzer.md
+    │   ├── requirement_4_codegen_simple.md
+    │   ├── requirement_5_codegen.md
+    │   ├── 2024_SysY_grammar.md
+    │   ├── 2024_SysY_detailed.md
+    │   └── llvm_course_guide.md
+    └── design_documents/     # 设计文档
+        ├── lexer.md
+        ├── parser.md
+        ├── semantic_analyzer.md
+        └── llvm_ir.md
+```
 
 ------
 
@@ -74,9 +169,9 @@
 
 > **注意**：**单词类别码**详见 [第一次实验要求文档](docs/course_info/requirement_1_lexer.md)。词法阶段主要处理 **a 类错误**（非法字符/格式错误）；存在词法错误时仍会继续解析以暴露更多错误。
 
-### 3. 项目结构 (Lexer)
+### 3. 相关文件
 
-词法分析相关核心文件：`include/Token.h`、`include/TokenType.h`、`include/Lexer.h`，`src/Lexer.cpp`、`src/TokenType.cpp`。完整目录见下方「项目结构 (Parser 分支)」。
+词法分析相关核心文件：`include/Token.h`、`include/TokenType.h`、`include/Lexer.h`，`src/Lexer.cpp`、`src/TokenType.cpp`。完整目录见「项目结构」。
 
 ------
 
@@ -93,52 +188,6 @@
 ### 2. 输入与输出规范（Parser 阶段）
 
 程序读取 `testfile.txt`，运行 **Lexer + Parser**；若启用 Parser 输出则生成 `parser.txt`（正确时）或参与合并写 `error.txt`（词法 a 类、语法 i/j/k 类等）。详见 [第二次实验要求](docs/course_info/requirement_2_parser.md)。
-
-### 3. 项目结构（含中间代码）
-
-当前主流程为 **Lexer → Parser → SemanticAnalyzer → IRGenVisitor**；输出以**中间代码**为准：无错误时写 `llvm_ir.txt`，有错误时合并之前阶段错误写 `error.txt`。
-
-```Plaintext
-.
-├── CMakeLists.txt
-├── src/
-│   ├── main.cpp            # 入口：读 testfile.txt，执行至 IR 生成，写 llvm_ir.txt / error.txt
-│   ├── Lexer.cpp
-│   ├── parser.cpp          # 递归下降 + AST 构造
-│   ├── SemanticAnalyzer.cpp # 语义分析 Visitor：符号表、作用域、错误检查
-│   ├── SymbolTable.cpp    # 作用域栈、Lookup/Register
-│   ├── ir/                 # IR 基础数据结构
-│   │   ├── BasicBlock.cpp
-│   │   ├── Constant.cpp
-│   │   ├── Function.cpp
-│   │   ├── Instruction.cpp
-│   │   ├── Module.cpp
-│   │   ├── Type.cpp
-│   │   ├── User.cpp
-│   │   ├── Value.cpp
-│   │   └── IRPrintContext.cpp
-│   └── irgen/              # IR 生成与转换
-│       ├── IRBuilder.cpp
-│       ├── IRDeclEmitter.cpp
-│       ├── IRGenContext.cpp
-│       └── IRGenVisitor.cpp # 各类表达式、语句的 Visit 生成逻辑
-├── include/
-│   ├── Lexer.h
-│   ├── Parser.h
-│   ├── AST.h              # AST 节点与 Accept(Visitor)
-│   ├── ASTVisitor.h       # Visitor 接口
-│   ├── SemanticAnalyzer.h # 语义分析 Visitor 实现
-│   ├── SymbolTable.h
-│   ├── ir/                # IR 定义头文件
-│   └── irgen/             # IR 生成相关头文件
-└── docs/
-    ├── course_info/
-    └── design_documents/
-        ├── lexer.md
-        ├── parser.md
-        ├── semantic_analyzer.md
-        └── llvm_ir.md     # LLVM IR 设计与代码生成思路
-```
 
 ------
 
@@ -163,6 +212,8 @@
 ------
 
 ## ⚙️ 中间代码生成 (LLVM IR)
+
+> **⚠️ LLVM 版本说明**：本项目**不遵循**课程 [第五次实验要求](docs/course_info/requirement_5_codegen.md) 中「LLVM 评测机使用 12.0.0 版本」的约束，生成的 IR 直接采用 **LLVM 20** 标准，以便使用现代工具链（如 `lli`、`opt`）验证与后续优化。
 
 ### 1. 功能概述
 
@@ -241,6 +292,22 @@ cmake --build .
 
 ## 📄 参考资料
 
-- [词法分析实验要求](docs/course_info/requirement_1_lexer.md)、[语法分析实验要求](docs/course_info/requirement_2_parser.md)、[语义分析实验要求](docs/course_info/requirement_3_analyzer.md)
+### 实验要求
+
+- [第一次实验：词法分析](docs/course_info/requirement_1_lexer.md)
+- [第二次实验：语法分析](docs/course_info/requirement_2_parser.md)
+- [第三次实验：语义分析](docs/course_info/requirement_3_analyzer.md)
+- [第四次实验：代码生成（简单）](docs/course_info/requirement_4_codegen_simple.md)
+- [第五次实验：代码生成](docs/course_info/requirement_5_codegen.md)
+
+### 课程规范与文法
+
 - [SysY 文法](docs/course_info/2024_SysY_grammar.md)、[SysY 详细定义](docs/course_info/2024_SysY_detailed.md)
-- [词法分析设计文档](docs/design_documents/lexer.md)、[语法分析设计文档](docs/design_documents/parser.md)、[语义分析设计文档](docs/design_documents/semantic_analyzer.md)
+- [LLVM 课程指导](docs/course_info/llvm_course_guide.md)
+
+### 设计文档
+
+- [词法分析设计文档](docs/design_documents/lexer.md)
+- [语法分析设计文档](docs/design_documents/parser.md)
+- [语义分析设计文档](docs/design_documents/semantic_analyzer.md)
+- [LLVM IR 设计文档](docs/design_documents/llvm_ir.md)

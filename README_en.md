@@ -49,8 +49,103 @@ This README will be dynamically updated to reflect development progress.
 | **Lexical Analysis** | `lexer` | ✅ Completed | Token recognition and error handling; outputs `output.txt` / `error.txt`. |
 | **Syntax Analysis** | `parser` | ✅ Completed | Recursive descent + AST; outputs `parser.txt` / `error.txt`. |
 | **Semantics / Symbol Table** | `analyzer` | ✅ Completed | Symbol table, scopes (RAII), Visitor traversal; outputs `symbol.txt` / `error.txt`. |
-| **Intermediate Code** | `ir` | ✅ Completed | In-memory IR structure (Value/User), IRBuilder generation, outputs `llvm_ir.txt`. |
-| **Target Code** | `backend` | ⏳ Pending | **Core goal**: MIPS generation + register allocation optimization. |
+| **Intermediate Code** | `llvm_ir` | ✅ Completed | In-memory IR structure (Value/User), IRBuilder generation, outputs `llvm_ir.txt`. |
+| **Target Code** | `mips` | ⏳ Pending | **Core goal**: MIPS generation + register allocation optimization. |
+
+------
+
+## 📁 Project Structure
+
+The main pipeline is **Lexer → Parser → SemanticAnalyzer → IRGenVisitor**. Final output is defined by the intermediate code stage: **no errors** → `llvm_ir.txt`; **any errors** → merged `error.txt` from all previous stages.
+
+```Plaintext
+.
+├── CMakeLists.txt
+├── src/
+│   ├── main.cpp              # Entry: read testfile.txt, execute to IR generation, write llvm_ir.txt / error.txt
+│   ├── Driver.cpp            # Main driver
+│   ├── Lexer.cpp
+│   ├── Parser.cpp            # Recursive descent + AST construction
+│   ├── AST.cpp
+│   ├── TokenType.cpp
+│   ├── SemanticAnalyzer.cpp  # Semantic Visitor: symbol table, scopes, errors
+│   ├── SymbolTable.cpp       # Scope stack, Lookup/Register
+│   ├── Symbol.cpp
+│   ├── ScopeGuard.cpp
+│   ├── ir/                   # Core IR data structures
+│   │   ├── BasicBlock.cpp
+│   │   ├── Constant.cpp
+│   │   ├── Function.cpp
+│   │   ├── Instruction.cpp
+│   │   ├── Module.cpp
+│   │   ├── Type.cpp
+│   │   ├── User.cpp
+│   │   ├── Value.cpp
+│   │   ├── Argument.cpp
+│   │   ├── GlobalVar.cpp
+│   │   ├── TypeManager.cpp
+│   │   └── IRPrintContext.cpp
+│   └── irgen/                # IR generation and translation
+│       ├── IRDeclEmitter.cpp
+│       ├── IRGenContext.cpp
+│       ├── IRGenVisitor.cpp
+│       ├── IRGenVisitorExpr.cpp
+│       ├── IRGenVisitorStmt.cpp
+│       ├── IRScopeGuard.cpp
+│       ├── TypeMapping.cpp
+│       └── ConstExpEvaluator.cpp
+├── include/
+│   ├── Lexer.h
+│   ├── Token.h
+│   ├── TokenType.h
+│   ├── Parser.h
+│   ├── AST.h                 # AST nodes and Accept(Visitor)
+│   ├── ASTVisitor.h          # Visitor interface
+│   ├── Driver.h
+│   ├── SemanticAnalyzer.h    # Semantic analysis Visitor implementation
+│   ├── SymbolTable.h
+│   ├── Symbol.h
+│   ├── ScopeGuard.h
+│   ├── ir/                   # IR headers
+│   │   ├── Value.h
+│   │   ├── User.h
+│   │   ├── Use.h
+│   │   ├── Type.h
+│   │   ├── TypeManager.h
+│   │   ├── Constant.h
+│   │   ├── Instruction.h
+│   │   ├── BasicBlock.h
+│   │   ├── Function.h
+│   │   ├── Argument.h
+│   │   ├── GlobalVar.h
+│   │   ├── Module.h
+│   │   ├── IRBuilder.h
+│   │   └── IRPrintContext.h
+│   └── irgen/                # IR generation headers
+│       ├── IRGenVisitor.h
+│       ├── IRGenContext.h
+│       ├── IRDeclEmitter.h
+│       ├── IRScopeGuard.h
+│       ├── TypeMapping.h
+│       ├── ConstExpEvaluator.h
+│       └── SSANameAllocator.h
+└── docs/
+    ├── ai_collab_notes/      # AI collaboration notes
+    ├── course_info/          # Experiment requirements and course specs
+    │   ├── requirement_1_lexer.md
+    │   ├── requirement_2_parser.md
+    │   ├── requirement_3_analyzer.md
+    │   ├── requirement_4_codegen_simple.md
+    │   ├── requirement_5_codegen.md
+    │   ├── 2024_SysY_grammar.md
+    │   ├── 2024_SysY_detailed.md
+    │   └── llvm_course_guide.md
+    └── design_documents/     # Design documents
+        ├── lexer.md
+        ├── parser.md
+        ├── semantic_analyzer.md
+        └── llvm_ir.md
+```
 
 ------
 
@@ -74,9 +169,9 @@ When using lexical analysis only, the program reads `testfile.txt` and can produ
 
 > **Note**: **Token codes** are defined in the [Experiment 1 Requirements](docs/course_info/requirement_1_lexer.md). The lexer handles **Type A errors** (illegal characters/format errors) and continues parsing to expose more errors when present.
 
-### 3. Project Structure (Lexer)
+### 3. Related Files
 
-Core lexer files: `include/Token.h`, `include/TokenType.h`, `include/Lexer.h`, `src/Lexer.cpp`, `src/TokenType.cpp`. The full directory tree is given under **Project Structure (including semantic analysis)** below.
+Core lexer files: `include/Token.h`, `include/TokenType.h`, `include/Lexer.h`, `src/Lexer.cpp`, `src/TokenType.cpp`. The full directory tree is given in the **Project Structure** section above.
 
 ------
 
@@ -93,52 +188,6 @@ Building on the lexer, the parser performs recursive-descent syntax analysis and
 ### 2. I/O Specification (Parser stage)
 
 When running **Lexer + Parser**, the program reads `testfile.txt`; if parser output is enabled it produces `parser.txt` (on success) or contributes to a merged `error.txt` (lexical type-a, syntax i/j/k, etc.). See [Experiment 2 Requirements](docs/course_info/requirement_2_parser.md).
-
-### 3. Project Structure (including intermediate code)
-
-The main pipeline is **Lexer → Parser → SemanticAnalyzer → IRGenVisitor**. Final output is defined by the intermediate code stage: **no errors** → `llvm_ir.txt`; **any errors** → merged `error.txt` from all previous stages.
-
-```Plaintext
-.
-├── CMakeLists.txt
-├── src/
-│   ├── main.cpp            # Entry: read testfile.txt, execute to IR generation, write llvm_ir.txt / error.txt
-│   ├── Lexer.cpp
-│   ├── parser.cpp         # Recursive descent + AST construction
-│   ├── SemanticAnalyzer.cpp # Semantic Visitor: symbol table, scopes, errors
-│   ├── SymbolTable.cpp    # Scope stack, Lookup/Register
-│   ├── ir/                # Core IR data structures
-│   │   ├── BasicBlock.cpp
-│   │   ├── Constant.cpp
-│   │   ├── Function.cpp
-│   │   ├── Instruction.cpp
-│   │   ├── Module.cpp
-│   │   ├── Type.cpp
-│   │   ├── User.cpp
-│   │   ├── Value.cpp
-│   │   └── IRPrintContext.cpp
-│   └── irgen/             # IR generation and translation
-│       ├── IRBuilder.cpp
-│       ├── IRDeclEmitter.cpp
-│       ├── IRGenContext.cpp
-│       └── IRGenVisitor.cpp # AST traversal and IR emission
-├── include/
-│   ├── Lexer.h
-│   ├── Parser.h
-│   ├── AST.h              # AST nodes and Accept(Visitor)
-│   ├── ASTVisitor.h       # Visitor interface
-│   ├── SemanticAnalyzer.h # Semantic analysis Visitor implementation
-│   ├── SymbolTable.h
-│   ├── ir/                # IR headers
-│   └── irgen/             # IR generation headers
-└── docs/
-    ├── course_info/
-    └── design_documents/
-        ├── lexer.md
-        ├── parser.md
-        ├── semantic_analyzer.md
-        └── llvm_ir.md     # LLVM IR design and code generation strategy
-```
 
 ------
 
@@ -163,6 +212,8 @@ See [Experiment 3 Requirements](docs/course_info/requirement_3_analyzer.md). The
 ------
 
 ## ⚙️ Intermediate Code Generation (LLVM IR)
+
+> **⚠️ LLVM version**：This project **does not follow** the course [Experiment 5 requirement](docs/course_info/requirement_5_codegen.md) that the evaluation environment uses LLVM 12.0.0. Generated IR conforms to **LLVM 20** so that modern toolchains (e.g. `lli`, `opt`) can be used for verification and future optimizations.
 
 ### 1. Overview
 
@@ -239,6 +290,22 @@ Place `testfile.txt` in the executable’s working directory (or set the IDE run
 
 ## 📄 References
 
-- [Experiment 1 (Lexer)](docs/course_info/requirement_1_lexer.md), [Experiment 2 (Parser)](docs/course_info/requirement_2_parser.md), [Experiment 3 (Semantic analysis)](docs/course_info/requirement_3_analyzer.md)
+### Experiment Requirements
+
+- [Experiment 1: Lexical Analysis](docs/course_info/requirement_1_lexer.md)
+- [Experiment 2: Syntax Analysis](docs/course_info/requirement_2_parser.md)
+- [Experiment 3: Semantic Analysis](docs/course_info/requirement_3_analyzer.md)
+- [Experiment 4: Code Generation (Simple)](docs/course_info/requirement_4_codegen_simple.md)
+- [Experiment 5: Code Generation](docs/course_info/requirement_5_codegen.md)
+
+### Course Specs and Grammar
+
 - [SysY Grammar](docs/course_info/2024_SysY_grammar.md), [SysY detailed definition](docs/course_info/2024_SysY_detailed.md)
-- [Lexer design](docs/design_documents/lexer.md), [Parser design](docs/design_documents/parser.md), [Semantic analyzer design](docs/design_documents/semantic_analyzer.md)
+- [LLVM course guide](docs/course_info/llvm_course_guide.md)
+
+### Design Documents
+
+- [Lexer design](docs/design_documents/lexer.md)
+- [Parser design](docs/design_documents/parser.md)
+- [Semantic analyzer design](docs/design_documents/semantic_analyzer.md)
+- [LLVM IR design](docs/design_documents/llvm_ir.md)
