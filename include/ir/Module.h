@@ -99,8 +99,13 @@ namespace ir {
          */
         ~Module();
 
-        /** @brief Print entire module to LLVM IR (globals, declares, defines). */
-        void Print(std::ostream& os) const;
+        /**
+         * @brief Print entire module to LLVM IR (globals, declares, defines).
+         * @param renumber_ssa If true (default), SSA values and block labels are renumbered in
+         *        layout order (%0, %1, ..., entry, for.cond.1). If false, original names from
+         *        IRBuilder/creation are used (useful for debugging or matching internal names).
+         */
+        void Print(std::ostream& os, bool renumber_ssa = true) const;
 
     private:
         /** Ensure the given lib I/O function is declared (idempotent). Only declares if \p name

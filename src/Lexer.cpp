@@ -99,9 +99,10 @@ void Lexer::SkipComment() {
 void Lexer::GetStringConst() {
     std::string str_const;
     str_const.reserve(64);
-    cur_pos_++;  // skip opening '"'
+    cur_pos_++; // skip opening '"'
     while (NotEnd() && source_[cur_pos_] != '\"') {
-        if (source_[cur_pos_] == '\\' && cur_pos_ + 1 < source_.size() && source_[cur_pos_ + 1] == 'n') {
+        if (source_[cur_pos_] == '\\' && cur_pos_ + 1 < source_.size() &&
+            source_[cur_pos_ + 1] == 'n') {
             str_const += '\n';
             cur_pos_ += 2;
         } else {
@@ -117,9 +118,10 @@ void Lexer::GetStringConst() {
 void Lexer::GetCharConst() {
     std::string char_const;
     char_const.reserve(64);
-    cur_pos_++;  // skip opening '\''
+    cur_pos_++; // skip opening '\''
     while (NotEnd() && source_[cur_pos_] != '\'') {
-        if (source_[cur_pos_] == '\\' && cur_pos_ + 1 < source_.size() && source_[cur_pos_ + 1] == 'n') {
+        if (source_[cur_pos_] == '\\' && cur_pos_ + 1 < source_.size() &&
+            source_[cur_pos_ + 1] == 'n') {
             char_const += '\n';
             cur_pos_ += 2;
         } else {

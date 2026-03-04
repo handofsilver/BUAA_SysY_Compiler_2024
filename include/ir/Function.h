@@ -65,8 +65,12 @@ namespace ir {
         /** @brief Print as operand: @name. */
         void DefaultPrintAsOperand(std::ostream& os) const override;
 
-        /** @brief Print declare or define to stream. */
-        void Print(std::ostream& os) const;
+        /**
+         * @brief Print declare or define to stream.
+         * @param renumber_ssa If true (default), use layout-order SSA/block renumbering; if false,
+         *        use original Value/Block names.
+         */
+        void Print(std::ostream& os, bool renumber_ssa = true) const;
 
     private:
         std::vector<std::unique_ptr<BasicBlock>> blocks_;

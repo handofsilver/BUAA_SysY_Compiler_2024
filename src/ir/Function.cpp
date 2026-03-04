@@ -14,7 +14,7 @@ namespace ir {
         os << "@" << GetName();
     }
 
-    void Function::Print(std::ostream& os) const {
+    void Function::Print(std::ostream& os, bool renumber_ssa) const {
         Type* ty = GetType();
         FunctionType* ft = ty ? dynamic_cast<FunctionType*>(ty) : nullptr;
         if (!ft) {
@@ -42,9 +42,13 @@ namespace ir {
             return;
         }
 
-        // Definition: build print-time SSA/block renumbering, then print.
+        // Definition: optionally build print-time SSA/block renumbering, then print.
+        const IRPrintContext* ctx_ptr = nullptr;
         IRPrintContext ctx;
-        ctx.Build(this);
+        if (renumber_ssa) {
+            ctx.Build(this);
+            ctx_ptr = &ctx;
+        }
 
         os << "define dso_local ";
         if (return_type) {
@@ -59,7 +63,7 @@ namespace ir {
             if (arg && arg->GetType()) {
                 arg->GetType()->Print(os);
                 std::string name;
-                if (ctx.GetSSAName(arg, name)) {
+                if (ctx_ptr && ctx_ptr->GetSSAName(arg, name)) {
                     os << " %" << name;
                 } else {
                     os << " %" << (arg->GetName().empty() ? std::to_string(i) : arg->GetName());
@@ -70,7 +74,7 @@ namespace ir {
 
         for (const auto& block : blocks_) {
             if (block) {
-                block->Print(os, &ctx);
+                block->Print(os, ctx_ptr);
             }
         }
 

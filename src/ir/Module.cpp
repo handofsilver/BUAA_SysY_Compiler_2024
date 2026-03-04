@@ -135,7 +135,7 @@ namespace ir {
     // Print
     // =========================================================================
 
-    void Module::Print(std::ostream& os) const {
+    void Module::Print(std::ostream& os, bool renumber_ssa) const {
         for (const auto& g : global_vars_) {
             if (g) {
                 g->Print(os);
@@ -143,7 +143,7 @@ namespace ir {
         }
         for (const auto& f : functions_) {
             if (f) {
-                f->Print(os);
+                f->Print(os, renumber_ssa);
             }
         }
     }

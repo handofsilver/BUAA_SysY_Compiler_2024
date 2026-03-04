@@ -1185,8 +1185,11 @@ IR 输出阶段将内存中的 Module 打印为符合课程要求的 .ll 文本�
 
 ```cpp
 // 主控侧（示意）
-result.module->Print(ostream);
+result.module->Print(ostream);                    // 默认：按布局序重编号
+result.module->Print(ostream, false);             // 使用原始名字（不重编号）
 ```
+
+**是否重编号**：`Module::Print(ostream, renumber_ssa)` 的第二个参数默认为 `true`。为 `true` 时使用 §10.2 的 IRPrintContext 按布局序重编号（%0, %1, ..., entry, for.cond.1）；为 `false` 时不构建 IRPrintContext，所有 SSA 值和块标签使用生成阶段分配的**原始名字**（便于调试或与内部结构对照）。灵活切换方式：在 main 中设置 `kRenumberSSAForPrint` 常量，或后续通过命令行参数传入。
 
 Module::Print 按顺序输出：(1) 所有全局变量/常量（GlobalVar::Print）；(2) 所有函数（Function::Print）。不单独输出“声明块”：库函数（getint、putint 等）若仅被声明未定义，在 Function::Print 中通过 `blocks_.empty()` 判断，输出为 `declare ...`，否则输出为 `define ...`。
 
@@ -1341,5 +1344,5 @@ InstPrintName(this, context) 在 context 非空时取 context->GetSSAName(this)�
 ## 附录：与课程要求的对应
 
 - **函数库映射**：内置 `putint` / `getint` / `putch` / `getch` 等运行时声明，在 IR 层被正确地对应为 `@putint` 等 `dso_local` 函数的外部声明，`Type` 模型会自动装配其参数。
-- **输出格式一致性**：输出 `llvm_ir.txt` 全面遵循课程实验要求的子集 LLVM IR 标准格式（去除复杂 metadata/attribute），包括基本块的自动重新编号（SSA form）。生成的文本必须能直接送入 LLVM 本地工具链 `lli` 进行黑盒运行测试并返回相同的运行时退出状态。
+- **输出格式一致性**：输出 `llvm_ir.txt` 全面遵循课程实验要求的子集 LLVM IR 标准格式（去除复杂 metadata/attribute），包括基本块的自动重新编号（SSA form）。生成的文本必须能直接送入 LLVM 本地工具链 `lli` 进行黑盒运行测试并返回相同的运行时退出状态。若需使用**原始名字**（不重编号），可调用 `Module::Print(ostream, false)` 或设置主控中的 `kRenumberSSAForPrint = false`。
 

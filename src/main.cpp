@@ -40,10 +40,11 @@ int main() {
         std::string source = buf.str();
         in.close();
 
-        const bool kEmitLexerOutput = true;   /* requirement_1: lexer.txt  */
-        const bool kEmitParserOutput = true;  /* requirement_2: parser.txt */
-        const bool kEmitSymbolOutput = false; /* requirement_3: symbol.txt */
-        const bool kEnableMem2Reg = true;     /* IR optimization: mem2reg   */
+        const bool kEmitLexerOutput = true;     /* requirement_1: lexer.txt  */
+        const bool kEmitParserOutput = true;    /* requirement_2: parser.txt */
+        const bool kEmitSymbolOutput = false;   /* requirement_3: symbol.txt */
+        const bool kEnableMem2Reg = true;       /* IR optimization: mem2reg   */
+        const bool kRenumberSSAForPrint = true; /* false = use original IR names (debug) */
         CompilerResult result =
             RunCompiler(source, kEmitLexerOutput, kEmitParserOutput, kEmitSymbolOutput);
 
@@ -76,7 +77,7 @@ int main() {
                     }
                 }
                 std::ofstream llvm_out("llvm_ir.txt");
-                result.module->Print(llvm_out);
+                result.module->Print(llvm_out, kRenumberSSAForPrint);
             }
         }
         return 0;
