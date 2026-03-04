@@ -29,6 +29,7 @@ namespace ir {
             if (call && call->GetType() && call->GetType()->GetTypeId() == TypeID::VOID_TY_ID) {
                 return false;
             }
+            // PhiInst always produces a value (handled by falling through to return true).
             return true;
         }
 

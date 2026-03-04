@@ -5,6 +5,7 @@
  */
 #include "Driver.h"
 #include "ir/Module.h"
+#include "pass/Mem2Reg.h"
 #include <cerrno>
 #include <cstring>
 #include <exception>
@@ -39,9 +40,10 @@ int main() {
         std::string source = buf.str();
         in.close();
 
-        const bool kEmitLexerOutput = true;   /* requirement_1: lexer.txt */
+        const bool kEmitLexerOutput = true;   /* requirement_1: lexer.txt  */
         const bool kEmitParserOutput = true;  /* requirement_2: parser.txt */
         const bool kEmitSymbolOutput = false; /* requirement_3: symbol.txt */
+        const bool kEnableMem2Reg = true;     /* IR optimization: mem2reg   */
         CompilerResult result =
             RunCompiler(source, kEmitLexerOutput, kEmitParserOutput, kEmitSymbolOutput);
 
@@ -64,6 +66,15 @@ int main() {
                 symbol_out << result.symbol_output;
             }
             if (result.module) {
+                if (kEnableMem2Reg) {
+                    pass::Mem2RegPass mem2reg;
+                    for (auto& func : result.module->GetFunctions()) {
+                        // Skip external declarations (no basic blocks).
+                        if (!func->GetBlocks().empty()) {
+                            mem2reg.Run(*func);
+                        }
+                    }
+                }
                 std::ofstream llvm_out("llvm_ir.txt");
                 result.module->Print(llvm_out);
             }

@@ -8,7 +8,7 @@
 
 > 北航计算机学院编译原理课程实验 - SysY 语言编译器（C++17 重构版）
 
-本仓库记录了该编译器从 Java 版本迁移至 C++ 版本的重构过程。项目按实验阶段管理分支，当前已完成**词法分析**、**语法分析**与**语义分析**阶段；主控读取 `testfile.txt`，经 Lexer → Parser → SemanticAnalyzer 后输出 `symbol.txt`（无错误）或 `error.txt`（有错误）。
+本仓库记录了该编译器从 Java 版本迁移至 C++ 版本的重构过程。项目按实验阶段管理分支，当前已完成**词法分析**、**语法分析**、**语义分析**与**中间代码生成（含 Mem2Reg 优化）**阶段；主控读取 `testfile.txt`，经完整前端流水线后生成完全 SSA 形式的 LLVM IR，输出 `llvm_ir.txt`（无错误）或 `error.txt`（有错误）。
 
 ------
 
@@ -49,14 +49,15 @@
 | **词法分析**    | `lexer`    | ✅ 已完成 | Token 识别与错误处理，输出 `output.txt` / `error.txt`。                    |
 | **语法分析**    | `parser`   | ✅ 已完成 | 递归下降 + AST，输出 `parser.txt` / `error.txt`。                         |
 | **语义/符号表** | `analyzer` | ✅ 已完成 | 符号表、作用域（RAII）、Visitor 遍历；输出 `symbol.txt` / `error.txt`。   |
-| **中间代码**    | `llvm_ir`       | ✅ 已完成 | 基于内存的 IR 树形结构（Value/User）、IRBuilder 模式生成，输出 `llvm_ir.txt`。|
-| **目标代码**    | `mips`  | ⏳ 待开发 | **本次重构核心目标**：MIPS 生成 + 寄存器分配优化。                         |
+| **中间代码**    | `llvm_ir`  | ✅ 已完成 | 基于内存的 IR 树形结构（Value/User）、IRBuilder 模式生成，输出 `llvm_ir.txt`。|
+| **IR 优化**     | `mem2reg`  | ✅ 已完成 | **Mem2Reg Pass**：CFG 构建、Cooper 支配树、支配边界、φ 节点插入与 SSA 重命名；输出完全 SSA 形式的 `llvm_ir.txt`。|
+| **目标代码**    | `mips`     | ⏳ 待开发 | **本次重构核心目标**：MIPS 生成 + 寄存器分配优化。                         |
 
 ------
 
 ## 📁 项目结构
 
-当前主流程为 **Lexer → Parser → SemanticAnalyzer → IRGenVisitor**；输出以**中间代码**为准：无错误时写 `llvm_ir.txt`，有错误时合并之前阶段错误写 `error.txt`。
+当前主流程为 **Lexer → Parser → SemanticAnalyzer → IRGenVisitor → Mem2RegPass**；输出以**中间代码**为准：无错误时写完全 SSA 形式的 `llvm_ir.txt`，有错误时合并之前阶段错误写 `error.txt`。
 
 ```Plaintext
 .
@@ -85,15 +86,19 @@
 │   │   ├── GlobalVar.cpp
 │   │   ├── TypeManager.cpp
 │   │   └── IRPrintContext.cpp
-│   └── irgen/                # IR 生成与转换
-│       ├── IRDeclEmitter.cpp
-│       ├── IRGenContext.cpp
-│       ├── IRGenVisitor.cpp
-│       ├── IRGenVisitorExpr.cpp
-│       ├── IRGenVisitorStmt.cpp
-│       ├── IRScopeGuard.cpp
-│       ├── TypeMapping.cpp
-│       └── ConstExpEvaluator.cpp
+│   ├── irgen/                # IR 生成与转换
+│   │   ├── IRDeclEmitter.cpp
+│   │   ├── IRGenContext.cpp
+│   │   ├── IRGenVisitor.cpp
+│   │   ├── IRGenVisitorExpr.cpp
+│   │   ├── IRGenVisitorStmt.cpp
+│   │   ├── IRScopeGuard.cpp
+│   │   ├── TypeMapping.cpp
+│   │   └── ConstExpEvaluator.cpp
+│   └── pass/                 # IR 优化 Pass
+│       ├── CFGBuilder.cpp
+│       ├── DomTree.cpp
+│       └── Mem2Reg.cpp
 ├── include/
 │   ├── Lexer.h
 │   ├── Token.h
@@ -121,14 +126,19 @@
 │   │   ├── Module.h
 │   │   ├── IRBuilder.h
 │   │   └── IRPrintContext.h
-│   └── irgen/                # IR 生成相关头文件
-│       ├── IRGenVisitor.h
-│       ├── IRGenContext.h
-│       ├── IRDeclEmitter.h
-│       ├── IRScopeGuard.h
-│       ├── TypeMapping.h
-│       ├── ConstExpEvaluator.h
-│       └── SSANameAllocator.h
+│   ├── irgen/                # IR 生成相关头文件
+│   │   ├── IRGenVisitor.h
+│   │   ├── IRGenContext.h
+│   │   ├── IRDeclEmitter.h
+│   │   ├── IRScopeGuard.h
+│   │   ├── TypeMapping.h
+│   │   ├── ConstExpEvaluator.h
+│   │   └── SSANameAllocator.h
+│   └── pass/                 # IR 优化 Pass 头文件
+│       ├── Pass.h
+│       ├── CFGBuilder.h
+│       ├── DomTree.h
+│       └── Mem2Reg.h
 └── docs/
     ├── ai_collab_notes/      # AI协作记录
     ├── course_info/          # 实验要求与课程规范
@@ -144,7 +154,8 @@
         ├── lexer.md
         ├── parser.md
         ├── semantic_analyzer.md
-        └── llvm_ir.md
+        ├── llvm_ir.md
+        └── mem2reg.md
 ```
 
 ------
@@ -224,7 +235,7 @@
   - **IRGenVisitor** 继承 `ASTVisitor` 驱动 AST 遍历。
   - **IRBuilder** 充当工厂类，负责在当前基本块末尾创建并插入指令。
   - **IRDeclEmitter** 封装繁琐的符号声明逻辑。
-  - **短路求值与控制流**：为 `&&` 和 `||` 实现了精确的短路控制流生成。采用局部变量 (Alloca/Load/Store) 机制代替 Phi 节点来处理短路求值结果及变量赋值，后续将通过 mem2reg 等优化遍消除。
+  - **短路求值与控制流**：为 `&&` 和 `||` 实现了精确的短路控制流生成。采用局部变量 (Alloca/Load/Store) 机制代替 Phi 节点来处理短路求值结果及变量赋值，由 **Mem2Reg Pass** 在后续优化阶段消除。
 
 ### 2. 输入与输出规范（IR 生成阶段）
 
@@ -311,3 +322,4 @@ cmake --build .
 - [语法分析设计文档](docs/design_documents/parser.md)
 - [语义分析设计文档](docs/design_documents/semantic_analyzer.md)
 - [LLVM IR 设计文档](docs/design_documents/llvm_ir.md)
+- [Mem2Reg 优化设计文档](docs/design_documents/mem2reg.md)

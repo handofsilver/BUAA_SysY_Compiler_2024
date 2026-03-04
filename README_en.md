@@ -8,7 +8,7 @@
 
 > BUAA School of Computer Science and Engineering - Compiler Principles Course Project - SysY Language Compiler (C++17 Refactored Version)
 
-This repository documents the refactoring of a SysY compiler from Java to C++. Development is organized by stages. **Lexical**, **syntax**, and **semantic analysis** are complete: the driver reads `testfile.txt`, runs Lexer → Parser → SemanticAnalyzer, and writes `symbol.txt` (when there are no errors) or `error.txt` (when any stage reports errors).
+This repository documents the refactoring of a SysY compiler from Java to C++. Development is organized by stages. **Lexical analysis**, **syntax analysis**, **semantic analysis**, and **intermediate code generation (including Mem2Reg optimization)** are all complete. The driver reads `testfile.txt`, runs the full frontend pipeline followed by the Mem2Reg SSA promotion pass, and writes a fully-SSA-form `llvm_ir.txt` (no errors) or `error.txt` (errors present).
 
 ------
 
@@ -50,13 +50,14 @@ This README will be dynamically updated to reflect development progress.
 | **Syntax Analysis** | `parser` | ✅ Completed | Recursive descent + AST; outputs `parser.txt` / `error.txt`. |
 | **Semantics / Symbol Table** | `analyzer` | ✅ Completed | Symbol table, scopes (RAII), Visitor traversal; outputs `symbol.txt` / `error.txt`. |
 | **Intermediate Code** | `llvm_ir` | ✅ Completed | In-memory IR structure (Value/User), IRBuilder generation, outputs `llvm_ir.txt`. |
+| **IR Optimization** | `mem2reg` | ✅ Completed | **Mem2Reg Pass**: CFG construction, Cooper dominator tree, dominance frontier, φ-node insertion and SSA renaming; outputs fully-SSA-form `llvm_ir.txt`. |
 | **Target Code** | `mips` | ⏳ Pending | **Core goal**: MIPS generation + register allocation optimization. |
 
 ------
 
 ## 📁 Project Structure
 
-The main pipeline is **Lexer → Parser → SemanticAnalyzer → IRGenVisitor**. Final output is defined by the intermediate code stage: **no errors** → `llvm_ir.txt`; **any errors** → merged `error.txt` from all previous stages.
+The main pipeline is **Lexer → Parser → SemanticAnalyzer → IRGenVisitor → Mem2RegPass**. Final output: **no errors** → fully-SSA-form `llvm_ir.txt`; **any errors** → merged `error.txt` from all previous stages.
 
 ```Plaintext
 .
@@ -85,15 +86,19 @@ The main pipeline is **Lexer → Parser → SemanticAnalyzer → IRGenVisitor**.
 │   │   ├── GlobalVar.cpp
 │   │   ├── TypeManager.cpp
 │   │   └── IRPrintContext.cpp
-│   └── irgen/                # IR generation and translation
-│       ├── IRDeclEmitter.cpp
-│       ├── IRGenContext.cpp
-│       ├── IRGenVisitor.cpp
-│       ├── IRGenVisitorExpr.cpp
-│       ├── IRGenVisitorStmt.cpp
-│       ├── IRScopeGuard.cpp
-│       ├── TypeMapping.cpp
-│       └── ConstExpEvaluator.cpp
+│   ├── irgen/                # IR generation and translation
+│   │   ├── IRDeclEmitter.cpp
+│   │   ├── IRGenContext.cpp
+│   │   ├── IRGenVisitor.cpp
+│   │   ├── IRGenVisitorExpr.cpp
+│   │   ├── IRGenVisitorStmt.cpp
+│   │   ├── IRScopeGuard.cpp
+│   │   ├── TypeMapping.cpp
+│   │   └── ConstExpEvaluator.cpp
+│   └── pass/                 # IR optimization passes
+│       ├── CFGBuilder.cpp
+│       ├── DomTree.cpp
+│       └── Mem2Reg.cpp
 ├── include/
 │   ├── Lexer.h
 │   ├── Token.h
@@ -121,14 +126,19 @@ The main pipeline is **Lexer → Parser → SemanticAnalyzer → IRGenVisitor**.
 │   │   ├── Module.h
 │   │   ├── IRBuilder.h
 │   │   └── IRPrintContext.h
-│   └── irgen/                # IR generation headers
-│       ├── IRGenVisitor.h
-│       ├── IRGenContext.h
-│       ├── IRDeclEmitter.h
-│       ├── IRScopeGuard.h
-│       ├── TypeMapping.h
-│       ├── ConstExpEvaluator.h
-│       └── SSANameAllocator.h
+│   ├── irgen/                # IR generation headers
+│   │   ├── IRGenVisitor.h
+│   │   ├── IRGenContext.h
+│   │   ├── IRDeclEmitter.h
+│   │   ├── IRScopeGuard.h
+│   │   ├── TypeMapping.h
+│   │   ├── ConstExpEvaluator.h
+│   │   └── SSANameAllocator.h
+│   └── pass/                 # IR optimization pass headers
+│       ├── Pass.h
+│       ├── CFGBuilder.h
+│       ├── DomTree.h
+│       └── Mem2Reg.h
 └── docs/
     ├── ai_collab_notes/      # AI collaboration notes
     ├── course_info/          # Experiment requirements and course specs
@@ -144,7 +154,8 @@ The main pipeline is **Lexer → Parser → SemanticAnalyzer → IRGenVisitor**.
         ├── lexer.md
         ├── parser.md
         ├── semantic_analyzer.md
-        └── llvm_ir.md
+        ├── llvm_ir.md
+        └── mem2reg.md
 ```
 
 ------
@@ -224,7 +235,7 @@ Building upon the Abstract Syntax Tree (AST) and the symbol table, a single **Vi
   - **IRGenVisitor** extends `ASTVisitor` to drive the AST traversal.
   - **IRBuilder** acts as a factory class, creating and inserting instructions at the current basic block.
   - **IRDeclEmitter** encapsulates verbose symbol declaration logic.
-  - **Short-circuit Evaluation & Control Flow**: Implements precise short-circuiting for `&&` and `||`. Local variable memory slots (Alloca/Load/Store) are used instead of Phi nodes to handle evaluation results and assignments, which will be optimized away by future passes like `mem2reg`.
+  - **Short-circuit Evaluation & Control Flow**: Implements precise short-circuiting for `&&` and `||`. Local variable memory slots (Alloca/Load/Store) are used instead of Phi nodes to handle evaluation results and assignments, which are eliminated by the **Mem2Reg Pass** in the subsequent optimization stage.
 
 ### 2. I/O Specification (IR stage)
 
@@ -309,3 +320,4 @@ Place `testfile.txt` in the executable’s working directory (or set the IDE run
 - [Parser design](docs/design_documents/parser.md)
 - [Semantic analyzer design](docs/design_documents/semantic_analyzer.md)
 - [LLVM IR design](docs/design_documents/llvm_ir.md)
+- [Mem2Reg optimization design](docs/design_documents/mem2reg.md)

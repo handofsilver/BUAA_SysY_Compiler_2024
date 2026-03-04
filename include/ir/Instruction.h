@@ -177,4 +177,37 @@ namespace ir {
         void Print(std::ostream& os, const IRPrintContext* context = nullptr) const override;
     };
 
+    /**
+     * @brief phi: SSA φ node. Selects a value based on which predecessor was taken.
+     *
+     * Printed as: %r = phi i32 [ %v0, %pred0 ], [ %v1, %pred1 ]
+     *
+     * Note: incoming (value, block) pairs are stored in a dedicated vector, NOT in
+     * User::operands_, because AddIncoming grows the list incrementally and a
+     * vector reallocation would invalidate Use* pointers already registered in
+     * value use-lists. The incoming values are therefore not tracked in the
+     * def-use chain (acceptable for our Mem2Reg use case).
+     */
+    class PhiInst : public Instruction {
+    public:
+        PhiInst();
+        PhiInst(const std::string& name, Type* type, BasicBlock* parent);
+
+        /** @brief Append one (value, predecessor) incoming pair. */
+        void AddIncoming(Value* val, BasicBlock* pred);
+
+        Value* GetIncomingValue(int i) const;
+        BasicBlock* GetIncomingBlock(int i) const;
+        int GetNumIncoming() const;
+
+        void Print(std::ostream& os, const IRPrintContext* context = nullptr) const override;
+
+    private:
+        struct IncomingPair {
+            Value* val;
+            BasicBlock* pred;
+        };
+        std::vector<IncomingPair> incoming_;
+    };
+
 } // namespace ir
