@@ -87,16 +87,11 @@ namespace mips {
             if (func->GetBlocks().empty()) {
                 continue; // 跳过外部声明（如 getint）
             }
-            if (func->GetName() == "main") {
-                FunctionEmitter fe(os_, *func);
-                fe.BuildStackFrame();
-                fe.EmitPrologue();
-                fe.EmitBody();
-                fe.EmitEpilogue();
-            } else {
-                os_ << func->GetName() << ":\n";
-                os_ << k_indent << "jr    $ra\n\n";
-            }
+            FunctionEmitter fe(os_, *func);
+            fe.BuildStackFrame();
+            fe.EmitPrologue();
+            fe.EmitBody();
+            // Epilogue 已在 EmitBody 中每条 ReturnInst 后输出，此处不再调用
         }
     }
 

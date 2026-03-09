@@ -1,6 +1,11 @@
 #include "mips/FunctionEmitter.h"
 #include "ir/Constant.h"
 #include "ir/GlobalVar.h"
+#include "ir/Type.h"
+#include <algorithm>
+#include <cassert>
+#include <set>
+#include <vector>
 
 namespace mips {
 
@@ -10,17 +15,44 @@ namespace mips {
         std::string GlobalLabel(const std::string& name) {
             return "global_" + name;
         }
+
+        std::string BlockLabel(const std::string& func_name, std::string label_name) {
+            // 按值传递 label_name，得到可修改的副本，便于将 '.' 替换为 '_'
+            std::replace(label_name.begin(), label_name.end(), '.', '_');
+            return func_name + "_" + label_name;
+        }
     } // namespace
 
     void FunctionEmitter::BuildStackFrame() {
         frame_size_ = 0;
-        // 见 step_M1a_substeps.md：先为 $ra 预留 4 字节，再为每个“产生结果的指令”预留 4 字节
         frame_size_ += 4; // $ra 保存槽
+        // 先为 AllocaInst 分配“空间”（不占结果槽）：标量 4 字节，数组 N×4 字节
+
+        const auto& entry_block = func_.GetBlocks()[0];
+        for (const auto& inst : entry_block->GetInstructions()) {
+            if (auto* alloca = dynamic_cast<const ir::AllocaInst*>(inst.get())) {
+                ir::Type* pointee =
+                    dynamic_cast<const ir::PointerType*>(alloca->GetType())->GetPointeeType();
+                int size = 4;
+                if (auto* arr = dynamic_cast<const ir::ArrayType*>(pointee)) {
+                    size = static_cast<int>(arr->GetNumElements()) * 4;
+                }
+                value_offset_[alloca] = frame_size_;
+                frame_size_ += size;
+            } else {
+                break; // 约定：所有alloca都在entry块最前面
+            }
+        }
+        // 再为其他产生结果的指令各预留 4 字节结果槽
         for (const auto& block : func_.GetBlocks()) {
             for (const auto& inst : block->GetInstructions()) {
                 if (dynamic_cast<const ir::BinaryInst*>(inst.get()) ||
                     dynamic_cast<const ir::LoadInst*>(inst.get()) ||
-                    dynamic_cast<const ir::GetElementPtrInst*>(inst.get())) {
+                    dynamic_cast<const ir::GetElementPtrInst*>(inst.get()) ||
+                    dynamic_cast<const ir::IcmpInst*>(inst.get()) ||
+                    dynamic_cast<const ir::ZextInst*>(inst.get()) ||
+                    dynamic_cast<const ir::TruncInst*>(inst.get()) ||
+                    dynamic_cast<const ir::PhiInst*>(inst.get())) {
                     value_offset_[inst.get()] = frame_size_;
                     frame_size_ += 4;
                 }
@@ -36,12 +68,14 @@ namespace mips {
 
     void FunctionEmitter::EmitBody() {
         for (const auto& block : func_.GetBlocks()) {
+            os_ << BlockLabel(func_.GetName(), block->GetName()) << ":\n";
             for (const auto& inst : block->GetInstructions()) {
                 if (auto* bin = dynamic_cast<const ir::BinaryInst*>(inst.get())) {
                     EmitBinaryInst(bin);
                 }
                 if (auto* ret = dynamic_cast<const ir::ReturnInst*>(inst.get())) {
                     EmitReturnInst(ret);
+                    EmitEpilogue(); // 多块时每条 return 路径都必须立即 epilogue，不能统一在最后
                 }
                 if (auto* load = dynamic_cast<const ir::LoadInst*>(inst.get())) {
                     EmitLoadInst(load);
@@ -52,6 +86,23 @@ namespace mips {
                 if (auto* gep = dynamic_cast<const ir::GetElementPtrInst*>(inst.get())) {
                     EmitGetElementPtrInst(gep);
                 }
+                if (auto* icmp = dynamic_cast<const ir::IcmpInst*>(inst.get())) {
+                    EmitIcmpInst(icmp);
+                }
+                if (auto* branch = dynamic_cast<const ir::BranchInst*>(inst.get())) {
+                    EmitPhiMovesBeforeBranch(block.get(), branch);
+                    EmitBranchInst(branch);
+                }
+                if (auto* zext = dynamic_cast<const ir::ZextInst*>(inst.get())) {
+                    EmitZextInst(zext);
+                }
+                if (auto* trunc = dynamic_cast<const ir::TruncInst*>(inst.get())) {
+                    EmitTruncInst(trunc);
+                }
+                if (auto* call = dynamic_cast<const ir::CallInst*>(inst.get())) {
+                    EmitCallInst(call);
+                }
+                // PhiInst：在本块不发射；只在前驱块末尾通过 EmitPhiMovesBeforeBranch 写入
             }
         }
     }
@@ -59,7 +110,7 @@ namespace mips {
     void FunctionEmitter::EmitEpilogue() {
         os_ << k_indent << "lw    $ra, 0($sp)\n";
         os_ << k_indent << "addiu $sp, $sp, " << frame_size_ << "\n";
-        os_ << k_indent << "jr    $ra\n\n";
+        os_ << k_indent << "jr    $ra\n";
     }
 
     void FunctionEmitter::EmitBinaryInst(const ir::BinaryInst* inst) {
@@ -107,11 +158,51 @@ namespace mips {
         os_ << k_indent << "sw    $t2, " << value_offset_[inst] << "($sp)\n";
     }
 
+    void FunctionEmitter::EmitIcmpInst(const ir::IcmpInst* inst) {
+        LoadValueToReg(inst->GetLhs(), "$t0");
+        LoadValueToReg(inst->GetRhs(), "$t1");
+        switch (inst->GetPredicate()) {
+            case ir::IcmpPred::SLT: os_ << k_indent << "slt   $t2, $t0, $t1\n"; break;
+            case ir::IcmpPred::SGT: os_ << k_indent << "sgt   $t2, $t0, $t1\n"; break;
+            case ir::IcmpPred::SLE: os_ << k_indent << "sle   $t2, $t0, $t1\n"; break;
+            case ir::IcmpPred::SGE: os_ << k_indent << "sge   $t2, $t0, $t1\n"; break;
+            case ir::IcmpPred::EQ: os_ << k_indent << "seq   $t2, $t0, $t1\n"; break;
+            case ir::IcmpPred::NE: os_ << k_indent << "sne   $t2, $t0, $t1\n"; break;
+        }
+        os_ << k_indent << "sw    $t2, " << value_offset_[inst] << "($sp)\n";
+    }
+
+    void FunctionEmitter::EmitBranchInst(const ir::BranchInst* inst) {
+        if (inst->IsConditional()) {
+            LoadValueToReg(inst->GetCond(), "$t0");
+            os_ << k_indent << "bnez  $t0, "
+                << BlockLabel(func_.GetName(), inst->GetIfTrue()->GetName()) << "\n";
+            os_ << k_indent << "j     "
+                << BlockLabel(func_.GetName(), inst->GetIfFalse()->GetName()) << "\n";
+        } else {
+            os_ << k_indent << "j     " << BlockLabel(func_.GetName(), inst->GetDest()->GetName())
+                << "\n";
+        }
+    }
+
+    void FunctionEmitter::EmitZextInst(const ir::ZextInst* inst) {
+        LoadValueToReg(inst->GetOperandValue(), "$t0");
+        os_ << k_indent << "sw    $t0, " << value_offset_[inst] << "($sp)\n";
+    }
+
+    void FunctionEmitter::EmitTruncInst(const ir::TruncInst* inst) {
+        LoadValueToReg(inst->GetOperandValue(), "$t0");
+        os_ << k_indent << "andi  $t0, $t0, 0xFF\n"; // i32 -> i8 取低 8 位
+        os_ << k_indent << "sw    $t0, " << value_offset_[inst] << "($sp)\n";
+    }
+
     void FunctionEmitter::LoadValueToReg(const ir::Value* val, const std::string& reg) {
         if (auto* const_int = dynamic_cast<const ir::ConstantInt*>(val)) {
             os_ << k_indent << "li    " << reg << ", " << const_int->GetValue() << "\n";
         } else if (auto* gv = dynamic_cast<const ir::GlobalVar*>(val)) {
             os_ << k_indent << "la    " << reg << ", " << GlobalLabel(gv->GetName()) << "\n";
+        } else if (auto* alloca = dynamic_cast<const ir::AllocaInst*>(val)) {
+            os_ << k_indent << "addiu " << reg << ", $sp, " << value_offset_[alloca] << "\n";
         } else {
             os_ << k_indent << "lw    " << reg << ", " << value_offset_[val] << "($sp)\n";
         }
@@ -120,6 +211,80 @@ namespace mips {
     void FunctionEmitter::EmitReturnInst(const ir::ReturnInst* inst) {
         if (auto* ret_val = inst->GetRetVal()) {
             LoadValueToReg(ret_val, "$v0");
+        }
+    }
+
+    void FunctionEmitter::EmitCallInst(const ir::CallInst*) {
+        // M3 库函数阶段再实现：getint/putint/putch/putstr + 用户函数调用
+    }
+
+    void FunctionEmitter::EmitPhiMovesBeforeBranch(const ir::BasicBlock* pred_block,
+                                                   const ir::BranchInst* branch) {
+        // 收集 P 的后继块
+        std::vector<const ir::BasicBlock*> successors;
+        if (branch->IsConditional()) {
+            successors.push_back(branch->GetIfTrue());
+            successors.push_back(branch->GetIfFalse());
+        } else {
+            successors.push_back(branch->GetDest());
+        }
+
+        for (const ir::BasicBlock* succ : successors) {
+            // 收集 succ 中“来自 pred_block”的 (phi, incoming_val) 对
+            std::vector<std::pair<const ir::PhiInst*, const ir::Value*>> edge_phis;
+            for (const auto& inst : succ->GetInstructions()) {
+                auto* phi = dynamic_cast<const ir::PhiInst*>(inst.get());
+                if (!phi) {
+                    break; // phi 只在块顶
+                }
+                for (int i = 0; i < phi->GetNumIncoming(); ++i) {
+                    if (phi->GetIncomingBlock(i) == pred_block) {
+                        edge_phis.push_back({phi, phi->GetIncomingValue(i)});
+                        break;
+                    }
+                }
+            }
+            if (edge_phis.empty()) {
+                continue;
+            }
+
+            // 按依赖拓扑序：若 phi2 的 incoming 是 phi1，则 phi1 先写
+            std::vector<std::pair<const ir::PhiInst*, const ir::Value*>> sorted;
+            std::set<const ir::PhiInst*> phis_in_succ;
+            for (const auto& p : edge_phis) {
+                phis_in_succ.insert(p.first);
+            }
+
+            while (sorted.size() < edge_phis.size()) {
+                bool added = false;
+                for (const auto& p : edge_phis) {
+                    if (std::find_if(sorted.begin(), sorted.end(), [&p](const auto& x) {
+                            return x.first == p.first;
+                        }) != sorted.end()) {
+                        continue;
+                    }
+                    const ir::Value* val = p.second;
+                    // 若 incoming 是同一后继块里的另一 phi，该 phi 必须先已在 sorted 中
+                    auto* incoming_phi = dynamic_cast<const ir::PhiInst*>(val);
+                    if (incoming_phi && phis_in_succ.count(incoming_phi)) {
+                        bool dep_ready = std::find_if(sorted.begin(), sorted.end(),
+                                                      [incoming_phi](const auto& x) {
+                                                          return x.first == incoming_phi;
+                                                      }) != sorted.end();
+                        if (!dep_ready) {
+                            continue;
+                        }
+                    }
+                    sorted.push_back(p);
+                    added = true;
+                }
+                assert(added && "phi cycle in same block");
+            }
+
+            for (const auto& p : sorted) {
+                LoadValueToReg(p.second, "$t0");
+                os_ << k_indent << "sw    $t0, " << value_offset_.at(p.first) << "($sp)\n";
+            }
         }
     }
 } // namespace mips

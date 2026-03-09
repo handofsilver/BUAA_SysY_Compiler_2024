@@ -28,6 +28,10 @@ namespace mips {
 
         void LoadValueToReg(const ir::Value* val, const std::string& reg);
 
+        /** 在块 P 的 BranchInst 之前发射：P 到各后继 S 的 phi move（按依赖顺序） */
+        void EmitPhiMovesBeforeBranch(const ir::BasicBlock* pred_block,
+                                      const ir::BranchInst* branch);
+
     private:
         std::ostream& os_;
         const ir::Function& func_;
