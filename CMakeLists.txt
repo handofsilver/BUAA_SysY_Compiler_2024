@@ -43,7 +43,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 #   set(SOURCES src/main.cpp src/lexer.cpp)
 # 这里用 GLOB 方便后续在 src 下添加词法分析等模块。
 # 当前会包含：main.cpp, Lexer.cpp, TokenType.cpp
-file(GLOB SOURCES "src/*.cpp" "src/ir/*.cpp" "src/irgen/*.cpp" "src/pass/*.cpp src/mips/*.cpp")
+file(GLOB SOURCES "src/*.cpp" "src/ir/*.cpp" "src/irgen/*.cpp" "src/pass/*.cpp" "src/mips/*.cpp")
 # Driver.cpp is included by src/*.cpp GLOB
 
 # -----------------------------------------------------------------------------

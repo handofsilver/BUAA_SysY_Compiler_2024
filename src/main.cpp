@@ -5,6 +5,7 @@
  */
 #include "Driver.h"
 #include "ir/Module.h"
+#include "mips/MipsEmitter.h"
 #include "pass/Mem2Reg.h"
 #include <cerrno>
 #include <cstring>
@@ -40,11 +41,14 @@ int main() {
         std::string source = buf.str();
         in.close();
 
-        const bool kEmitLexerOutput = true;     /* requirement_1: lexer.txt  */
-        const bool kEmitParserOutput = true;    /* requirement_2: parser.txt */
-        const bool kEmitSymbolOutput = false;   /* requirement_3: symbol.txt */
-        const bool kEnableMem2Reg = true;       /* IR optimization: mem2reg   */
+        const bool kEmitLexerOutput = true;     /*lexical analysis: lexer.txt  */
+        const bool kEmitParserOutput = true;    /* syntax analysis: parser.txt */
+        const bool kEmitSymbolOutput = true;    /* semantic analysis: symbol.txt */
+        const bool kEmitLLVMIROutput = true;    /* intermediate code(LLVM IR): llvm_ir.txt */
+        const bool kEnableMem2Reg = true;       /* IR optimization(Mem2Reg Pass): mem2reg   */
+        const bool kEmitMIPSOutput = true;      /* target code(MIPS): mips.txt */
         const bool kRenumberSSAForPrint = true; /* false = use original IR names (debug) */
+
         CompilerResult result =
             RunCompiler(source, kEmitLexerOutput, kEmitParserOutput, kEmitSymbolOutput);
 
@@ -66,7 +70,7 @@ int main() {
                 std::ofstream symbol_out("symbol.txt");
                 symbol_out << result.symbol_output;
             }
-            if (result.module) {
+            if (kEmitLLVMIROutput && result.module) {
                 if (kEnableMem2Reg) {
                     pass::Mem2RegPass mem2reg;
                     for (auto& func : result.module->GetFunctions()) {
@@ -78,6 +82,11 @@ int main() {
                 }
                 std::ofstream llvm_out("llvm_ir.txt");
                 result.module->Print(llvm_out, kRenumberSSAForPrint);
+            }
+            if (kEmitMIPSOutput && result.module) {
+                std::ofstream mips_out("mips.txt");
+                mips::MipsEmitter emitter(mips_out, *result.module);
+                emitter.Emit();
             }
         }
         return 0;

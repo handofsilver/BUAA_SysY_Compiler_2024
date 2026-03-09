@@ -39,7 +39,7 @@ LLVM 自带 MIPS 后端，可用 **llc** 将 LLVM IR 编译为 MIPS 汇编，作
 
 需安装包含 MIPS 目标的 LLVM（版本建议与生成 IR 的保持一致，如 LLVM 20）：
 
-- **Ubuntu/Debian**：  
+- **Ubuntu/Debian**：
   `sudo apt install llvm-20 llvm-20-dev`（若该包未启用 MIPS，需从源码编译 LLVM 并启用 `MIPS` target）。
 - **从源码构建**：在 CMake 中打开 `LLVM_TARGETS_TO_BUILD` 中的 `MIPS`。
 
@@ -89,5 +89,54 @@ llc -march=mips -mattr=+mips32r2 -filetype=asm -o mips.txt llvm_ir.txt
 | 仅 SysY 源文件 | 用本编译器生成 `llvm_ir.txt`，再对 `llvm_ir.txt` 用 llc 生成 MIPS；或若有参考 MIPS 编译器，直接用其编译同一 SysY 得到标准 mips.txt。 |
 | 已有 LLVM IR 文件 | 直接用 `llc -march=mips ... -o mips.txt llvm_ir.txt` 得到 MIPS；再按课程要求补库函数、检查指令集。 |
 
-本仓库 MIPS 后端开发完成后，可直接：  
+本仓库 MIPS 后端开发完成后，可直接：
 `testfile.txt → Compiler → mips.txt`，届时本编译器生成的即为符合课程规范的 MIPS 样例。
+
+---
+
+## 四、用 MARS.jar 运行 mips.txt
+
+课程要求使用**课程组修改版 MARS 4.5**，对应你手头的 `Mars.jar`。运行方式有两种。
+
+### 4.1 图形界面（推荐日常调试）
+
+1. 启动 MARS：
+   ```bash
+   java -jar Mars.jar
+   ```
+   若 `Mars.jar` 不在当前目录，请写完整路径，例如：
+   ```bash
+   java -jar /path/to/BUAA_Compiler_2026_Refactored/Mars.jar
+   ```
+
+2. 在 MARS 中：**File → Open**，选择项目根目录下的 `mips.txt`。
+
+3. 菜单 **Run → Run**（或工具栏运行按钮），程序从默认入口开始执行；若希望从 `main` 开始，可在 **Run → Run** 前在 **Run → Go** 的对话框中设置起始标签为 `main`，或使用下方命令行方式并加 `sm` 选项。
+
+4. 程序结束后，可在 Run 界面查看寄存器、内存；若程序用 syscall 退出，可看到退出码等。
+
+### 4.2 命令行（适合脚本/批量验证）
+
+在项目根目录（或保证 `Mars.jar` 与 `mips.txt` 路径正确）下执行：
+
+```bash
+# 基本：汇编并运行 mips.txt
+java -jar Mars.jar mips.txt
+
+# 从 main 标签开始执行（课程程序通常有 main）
+java -jar Mars.jar sm mips.txt
+
+# 不显示版权信息，便于重定向输出（如自动化测试）
+java -jar Mars.jar nc sm mips.txt
+```
+
+常用选项简要说明：
+
+| 选项 | 含义 |
+|------|------|
+| `sm` | 从 `main` 标签开始执行（若存在） |
+| `nc` | 不显示版权信息，便于脚本中捕获输出 |
+| `a` | 仅汇编，不模拟执行 |
+| `h` | 显示帮助 |
+
+**注意**：课程组修改版 MARS 可能与官方 MARS 在选项上略有差异，若上述命令报错，请以课程资料中的「竞速排序及仿真器使用说明2024」为准。确保本机已安装 **Java**（通常 JRE 8 或以上即可）：`java -version`。

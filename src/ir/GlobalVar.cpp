@@ -9,6 +9,16 @@
 #include <ostream>
 namespace ir {
 
+    bool GlobalVar::IsArray() const {
+        auto* pt = dynamic_cast<PointerType*>(GetType());
+        return pt && dynamic_cast<ArrayType*>(pt->GetPointeeType()) != nullptr;
+    }
+
+    ArrayType* GlobalVar::GetArrayType() const {
+        auto* pt = dynamic_cast<PointerType*>(GetType());
+        return pt ? dynamic_cast<ArrayType*>(pt->GetPointeeType()) : nullptr;
+    }
+
     void GlobalVar::DefaultPrintAsOperand(std::ostream& os) const {
         os << "@" << GetName();
     }

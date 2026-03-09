@@ -13,6 +13,8 @@
 
 namespace ir {
 
+    class ArrayType;
+
     /**
      * @brief Represents a global variable in the module.
      *
@@ -37,6 +39,12 @@ namespace ir {
         void SetConstant(bool c) {
             is_constant_ = c;
         }
+
+        /** @brief True if this global is an array (pointee is ArrayType). */
+        bool IsArray() const;
+
+        /** @brief Pointee type as ArrayType, or nullptr if not an array. */
+        ArrayType* GetArrayType() const;
 
         void DefaultPrintAsOperand(std::ostream& os) const override;
 
