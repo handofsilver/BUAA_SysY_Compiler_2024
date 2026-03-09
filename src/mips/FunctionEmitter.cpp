@@ -12,8 +12,11 @@ namespace mips {
     namespace {
         const char* k_indent = "    ";
 
-        std::string GlobalLabel(const std::string& name) {
-            return "global_" + name;
+        std::string GlobalLabel(std::string name) {
+            // 对于if.true.x等标签直接删除所有.为_
+            // 特别的，LLVM IR中字符串全局变量是.str.0等，删除开头的.
+            std::replace(name.begin(), name.end(), '.', '_');
+            return (name[0] == '_' ? "global" : "global_") + name;
         }
 
         std::string BlockLabel(const std::string& func_name, std::string label_name) {
@@ -55,8 +58,23 @@ namespace mips {
                     dynamic_cast<const ir::PhiInst*>(inst.get())) {
                     value_offset_[inst.get()] = frame_size_;
                     frame_size_ += 4;
+                } else if (auto* call = dynamic_cast<const ir::CallInst*>(inst.get())) {
+                    if (!dynamic_cast<const ir::VoidType*>(call->GetType())) {
+                        value_offset_[inst.get()] = frame_size_;
+                        frame_size_ += 4;
+                    }
                 }
             }
+        }
+        // 形参：前 4 个占栈槽（prologue 中从 $a0–$a3 写入），第 5 个起在 caller 传入的栈区，偏移
+        // frame_size + (i-4)*4
+        const size_t kNumArgs = func_.GetArguments().size();
+        for (size_t i = 0; i < kNumArgs && i < 4u; ++i) {
+            value_offset_[func_.GetArgument(i)] = frame_size_;
+            frame_size_ += 4;
+        }
+        for (size_t i = 4; i < kNumArgs; ++i) {
+            value_offset_[func_.GetArgument(i)] = frame_size_ + static_cast<int>((i - 4) * 4);
         }
     }
 
@@ -64,6 +82,11 @@ namespace mips {
         os_ << func_.GetName() << ":\n";
         os_ << k_indent << "addiu $sp, $sp, -" << frame_size_ << "\n";
         os_ << k_indent << "sw    $ra, 0($sp)\n";
+        const size_t kNumArgs = func_.GetArguments().size();
+        for (size_t i = 0; i < kNumArgs && i < 4u; ++i) {
+            os_ << k_indent << "sw    $a" << i << ", " << value_offset_.at(func_.GetArgument(i))
+                << "($sp)\n";
+        }
     }
 
     void FunctionEmitter::EmitBody() {
@@ -214,8 +237,68 @@ namespace mips {
         }
     }
 
-    void FunctionEmitter::EmitCallInst(const ir::CallInst*) {
-        // M3 库函数阶段再实现：getint/putint/putch/putstr + 用户函数调用
+    void FunctionEmitter::EmitCallInst(const ir::CallInst* inst) {
+        const std::string& name = inst->GetCallee()->GetName();
+        if (name == "getint" || name == "getchar" || name == "putint" || name == "putch" ||
+            name == "putstr") {
+            EmitLibraryFunctionCall(inst);
+            return;
+        }
+        const size_t kNumArgs = inst->GetNumArgs();
+        // 第 5 个及以后的参数通过栈传递：caller 在 jal 前预留空间并写入，callee 从 frame_size($sp)
+        // 起取
+        const size_t kExtraArgs = (kNumArgs > 4u) ? (kNumArgs - 4u) : 0u;
+        const int kExtraSize = static_cast<int>(kExtraArgs * 4);
+
+        if (kExtraSize > 0) {
+            os_ << k_indent << "addiu $sp, $sp, -" << kExtraSize << "\n";
+            for (size_t i = 4; i < kNumArgs; ++i) {
+                LoadValueToReg(inst->GetArg(static_cast<int>(i)), "$t0");
+                os_ << k_indent << "sw    $t0, " << static_cast<int>((i - 4) * 4) << "($sp)\n";
+            }
+        }
+
+        for (size_t i = 0; i < kNumArgs && i < 4u; ++i) {
+            LoadValueToReg(inst->GetArg(static_cast<int>(i)), "$a" + std::to_string(i));
+        }
+
+        os_ << k_indent << "jal   " << name << "\n";
+
+        if (kExtraSize > 0) {
+            os_ << k_indent << "addiu $sp, $sp, " << kExtraSize << "\n";
+        }
+
+        if (!dynamic_cast<const ir::VoidType*>(inst->GetType())) {
+            auto it = value_offset_.find(inst);
+            if (it != value_offset_.end()) {
+                os_ << k_indent << "sw    $v0, " << it->second << "($sp)\n";
+            }
+        }
+    }
+
+    void FunctionEmitter::EmitLibraryFunctionCall(const ir::CallInst* inst) {
+        const std::string& name = inst->GetCallee()->GetName();
+        if (name == "getint") {
+            os_ << k_indent << "li    $v0, 5\n";
+            os_ << k_indent << "syscall\n";
+            os_ << k_indent << "sw    $v0, " << value_offset_.at(inst) << "($sp)\n";
+        } else if (name == "getchar") {
+            os_ << k_indent << "li    $v0, 12\n";
+            os_ << k_indent << "syscall\n";
+            os_ << k_indent << "sw    $v0, " << value_offset_.at(inst) << "($sp)\n";
+        } else if (name == "putint") {
+            LoadValueToReg(inst->GetArg(0), "$a0");
+            os_ << k_indent << "li    $v0, 1\n";
+            os_ << k_indent << "syscall\n";
+        } else if (name == "putch") {
+            LoadValueToReg(inst->GetArg(0), "$a0");
+            os_ << k_indent << "li    $v0, 11\n";
+            os_ << k_indent << "syscall\n";
+        } else if (name == "putstr") {
+            LoadValueToReg(inst->GetArg(0), "$a0");
+            os_ << k_indent << "li    $v0, 4\n";
+            os_ << k_indent << "syscall\n";
+        }
     }
 
     void FunctionEmitter::EmitPhiMovesBeforeBranch(const ir::BasicBlock* pred_block,

@@ -3,17 +3,18 @@
 #include "ir/GlobalVar.h"
 #include "ir/Type.h"
 #include "mips/FunctionEmitter.h"
+#include <algorithm>
 
 namespace mips {
 
     namespace {
         const char* k_indent = "    "; // 4 spaces for instructions under a label
 
-        // 临时：在控制台打印 main 的返回值（便于 MARS 仿真验证），设为 false 可关闭
-        const bool kEmitDebugPrintMainRet = true;
-
-        std::string GlobalLabel(const std::string& name) {
-            return "global_" + name;
+        std::string GlobalLabel(std::string name) {
+            // 对于if.true.x等标签直接删除所有.为_
+            // 特别的，LLVM IR中字符串全局变量是.str.0等，删除开头的.
+            std::replace(name.begin(), name.end(), '.', '_');
+            return (name[0] == '_' ? "global" : "global_") + name;
         }
     } // namespace
 
@@ -29,29 +30,61 @@ namespace mips {
             os_ << k_indent << GlobalLabel(global->GetName()) << ": ";
 
             if (global->IsArray()) {
-                ir::ArrayType* at = global->GetArrayType();
-                assert(at != nullptr && "GlobalVar is not an array");
+                ir::ArrayType* arr_type = global->GetArrayType();
+                assert(arr_type != nullptr && "GlobalVar is not an array");
 
-                unsigned n = at->GetNumElements();
+                unsigned arr_size = arr_type->GetNumElements();
+                ir::Type* elem_ty = arr_type->GetElementType();
+                ir::IntegerType* it = dynamic_cast<ir::IntegerType*>(elem_ty);
+                bool is_i8_array = (it && it->GetBits() == 8);
+
                 ir::Constant* init = global->GetInitializer();
                 ir::ConstantArray* ca = dynamic_cast<ir::ConstantArray*>(init);
-                if (ca) {
-                    const auto& elts = ca->GetElements();
-                    // IRDeclEmitter::EmitGlobal zero-pads init to full size; initializer is never
-                    // short.
-                    assert(elts.size() == n && "global array initializer must be zero-padded to "
-                                               "full size (IRDeclEmitter::EmitGlobal)");
-                    os_ << ".word ";
-                    for (unsigned i = 0; i < n; ++i) {
-                        if (i != 0) {
-                            os_ << ", ";
+                if (is_i8_array) {
+                    // 字符串/char 数组：.asciiz "..." 或 .space n
+                    if (ca) {
+                        const auto& elts = ca->GetElements();
+                        assert(elts.size() == arr_size &&
+                               "global array initializer must be zero-padded");
+                        std::string s;
+                        for (size_t i = 0; i < elts.size(); ++i) {
+                            ir::ConstantInt* ci = dynamic_cast<ir::ConstantInt*>(elts[i]);
+                            int64_t v = ci ? ci->GetValue() : 0;
+                            if (v == 0) {
+                                break;
+                            }
+                            char c = static_cast<char>(v);
+                            if (c == '\\') {
+                                s += "\\\\";
+                            } else if (c == '"') {
+                                s += "\\\"";
+                            } else if (c == '\n') {
+                                s += "\\n";
+                            } else {
+                                s += c;
+                            }
                         }
-                        ir::ConstantInt* ci = dynamic_cast<ir::ConstantInt*>(elts[i]);
-                        os_ << (ci ? ci->GetValue() : 0);
+                        os_ << ".asciiz \"" << s << "\"\n";
+                    } else {
+                        os_ << ".space " << arr_size << "\n";
                     }
-                    os_ << "\n";
                 } else {
-                    os_ << ".space " << (4 * n) << "\n";
+                    if (ca) {
+                        const auto& elts = ca->GetElements();
+                        assert(elts.size() == arr_size &&
+                               "global array initializer must be zero-padded");
+                        os_ << ".word ";
+                        for (unsigned i = 0; i < arr_size; ++i) {
+                            if (i != 0) {
+                                os_ << ", ";
+                            }
+                            ir::ConstantInt* ci = dynamic_cast<ir::ConstantInt*>(elts[i]);
+                            os_ << (ci ? ci->GetValue() : 0);
+                        }
+                        os_ << "\n";
+                    } else {
+                        os_ << ".space " << (4 * arr_size) << "\n";
+                    }
                 }
             } else {
                 ir::Constant* init = global->GetInitializer();
@@ -68,18 +101,8 @@ namespace mips {
 
     void MipsEmitter::EmitTextSegment() {
         os_ << ".text\n";
-        os_ << "# 入口：调用 main，再用 syscall 10 退出\n";
         os_ << "__start:\n";
         os_ << k_indent << "jal   main\n";
-
-        if (kEmitDebugPrintMainRet) {
-            os_ << "    # 临时：在控制台打印 main 的返回值（可关闭 "
-                   "k_emit_debug_print_main_ret）\n";
-            os_ << k_indent << "move  $a0, $v0\n";
-            os_ << k_indent << "li    $v0, 1\n";
-            os_ << k_indent << "syscall\n";
-        }
-
         os_ << k_indent << "li    $v0, 10\n";
         os_ << k_indent << "syscall\n\n";
 

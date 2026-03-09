@@ -26,6 +26,8 @@ namespace mips {
         void EmitTruncInst(const ir::TruncInst* inst);
         void EmitCallInst(const ir::CallInst* inst);
 
+        void EmitLibraryFunctionCall(const ir::CallInst* inst);
+
         void LoadValueToReg(const ir::Value* val, const std::string& reg);
 
         /** 在块 P 的 BranchInst 之前发射：P 到各后继 S 的 phi move（按依赖顺序） */
