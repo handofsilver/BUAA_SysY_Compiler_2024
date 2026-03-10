@@ -12,6 +12,26 @@ namespace mips {
     namespace {
         const char* k_indent = "    ";
 
+        /** GEP 结果指针的 pointee 元素大小（字节）。i8 -> 1，i32 -> 4。 */
+        int GepElementSizeBytes(const ir::GetElementPtrInst* inst) {
+            auto* ptr_ty = dynamic_cast<const ir::PointerType*>(inst->GetType());
+            if (!ptr_ty) {
+                return 4;
+            }
+            ir::Type* pointee = ptr_ty->GetPointeeType();
+            if (!pointee) {
+                return 4;
+            }
+            ir::Type* elem_ty = pointee;
+            if (auto* arr = dynamic_cast<const ir::ArrayType*>(pointee)) {
+                elem_ty = arr->GetElementType();
+            }
+            if (auto* it = dynamic_cast<const ir::IntegerType*>(elem_ty)) {
+                return static_cast<int>(it->GetBits() / 8);
+            }
+            return 4;
+        }
+
         std::string GlobalLabel(std::string name) {
             // 对于if.true.x等标签直接删除所有.为_
             // 特别的，LLVM IR中字符串全局变量是.str.0等，删除开头的.
@@ -38,7 +58,16 @@ namespace mips {
                     dynamic_cast<const ir::PointerType*>(alloca->GetType())->GetPointeeType();
                 int size = 4;
                 if (auto* arr = dynamic_cast<const ir::ArrayType*>(pointee)) {
-                    size = static_cast<int>(arr->GetNumElements()) * 4;
+                    ir::Type* elem = arr->GetElementType();
+                    int elem_bytes = 4;
+                    if (auto* it = dynamic_cast<const ir::IntegerType*>(elem)) {
+                        elem_bytes = static_cast<int>(it->GetBits() / 8);
+                    }
+                    size = static_cast<int>(arr->GetNumElements()) * elem_bytes;
+                    // 至少 4 字节对齐，便于后续 value 槽对齐
+                    if (size > 0 && size % 4 != 0) {
+                        size = (size + 3) & ~3;
+                    }
                 }
                 value_offset_[alloca] = frame_size_;
                 frame_size_ += size;
@@ -159,15 +188,24 @@ namespace mips {
 
     void FunctionEmitter::EmitLoadInst(const ir::LoadInst* inst) {
         LoadValueToReg(inst->GetPointerOperand(), "$t0");
-        os_ << k_indent << "lw    $t0, 0($t0)\n";
+        auto* it = dynamic_cast<const ir::IntegerType*>(inst->GetType());
+        if (it && it->GetBits() == 8) {
+            os_ << k_indent << "lbu   $t0, 0($t0)\n"; // i8：按字节取，零扩展为 32 位
+        } else {
+            os_ << k_indent << "lw    $t0, 0($t0)\n";
+        }
         os_ << k_indent << "sw    $t0, " << value_offset_[inst] << "($sp)\n";
     }
 
     void FunctionEmitter::EmitStoreInst(const ir::StoreInst* inst) {
         LoadValueToReg(inst->GetValueOperand(), "$t0");
         LoadValueToReg(inst->GetPointerOperand(), "$t1");
-
-        os_ << k_indent << "sw    $t0, 0($t1)\n";
+        auto* it = dynamic_cast<const ir::IntegerType*>(inst->GetValueOperand()->GetType());
+        if (it && it->GetBits() == 8) {
+            os_ << k_indent << "sb    $t0, 0($t1)\n"; // i8：只存低 8 位
+        } else {
+            os_ << k_indent << "sw    $t0, 0($t1)\n";
+        }
     }
 
     void FunctionEmitter::EmitGetElementPtrInst(const ir::GetElementPtrInst* inst) {
@@ -176,8 +214,14 @@ namespace mips {
         const ir::Value* elem_index =
             inst->GetIndex(1) != nullptr ? inst->GetIndex(1) : inst->GetIndex(0);
         LoadValueToReg(elem_index, "$t1");
-        os_ << k_indent << "sll   $t2, $t1, 2\n";
-        os_ << k_indent << "addu  $t2, $t0, $t2\n";
+        int elem_size = GepElementSizeBytes(inst);
+        if (elem_size == 4) {
+            os_ << k_indent << "sll   $t2, $t1, 2\n";
+            os_ << k_indent << "addu  $t2, $t0, $t2\n";
+        } else {
+            // i8 等单字节：偏移 = index * 1，直接加
+            os_ << k_indent << "addu  $t2, $t0, $t1\n";
+        }
         os_ << k_indent << "sw    $t2, " << value_offset_[inst] << "($sp)\n";
     }
 
@@ -246,20 +290,29 @@ namespace mips {
         }
         const size_t kNumArgs = inst->GetNumArgs();
         // 第 5 个及以后的参数通过栈传递：caller 在 jal 前预留空间并写入，callee 从 frame_size($sp)
-        // 起取
+        // 起取。 必须先在本帧的 $sp 下把所有实参加载到寄存器，再调整 $sp 并写栈传参；否则 lw
+        // offset($sp) 会错位。
         const size_t kExtraArgs = (kNumArgs > 4u) ? (kNumArgs - 4u) : 0u;
         const int kExtraSize = static_cast<int>(kExtraArgs * 4);
 
+        // 1) 栈上传参加载到 $t0,$t1,...（仍用当前 $sp）
+        if (kExtraSize > 0) {
+            for (size_t i = 4; i < kNumArgs; ++i) {
+                LoadValueToReg(inst->GetArg(static_cast<int>(i)),
+                               "$t" + std::to_string(static_cast<int>(i - 4)));
+            }
+        }
+        // 2) 前 4 个实参加载到 $a0–$a3（仍用当前 $sp）
+        for (size_t i = 0; i < kNumArgs && i < 4u; ++i) {
+            LoadValueToReg(inst->GetArg(static_cast<int>(i)), "$a" + std::to_string(i));
+        }
+        // 3) 压栈并写入第 5+ 实参，再 jal
         if (kExtraSize > 0) {
             os_ << k_indent << "addiu $sp, $sp, -" << kExtraSize << "\n";
             for (size_t i = 4; i < kNumArgs; ++i) {
-                LoadValueToReg(inst->GetArg(static_cast<int>(i)), "$t0");
-                os_ << k_indent << "sw    $t0, " << static_cast<int>((i - 4) * 4) << "($sp)\n";
+                os_ << k_indent << "sw    $t" << (i - 4) << ", " << static_cast<int>((i - 4) * 4)
+                    << "($sp)\n";
             }
-        }
-
-        for (size_t i = 0; i < kNumArgs && i < 4u; ++i) {
-            LoadValueToReg(inst->GetArg(static_cast<int>(i)), "$a" + std::to_string(i));
         }
 
         os_ << k_indent << "jal   " << name << "\n";
@@ -286,6 +339,10 @@ namespace mips {
             os_ << k_indent << "li    $v0, 12\n";
             os_ << k_indent << "syscall\n";
             os_ << k_indent << "sw    $v0, " << value_offset_.at(inst) << "($sp)\n";
+            // MARS syscall 12 reads one char but leaves the trailing '\n' in the buffer;
+            // consume it so that a subsequent getint() reads the next line correctly.
+            os_ << k_indent << "li    $v0, 12\n";
+            os_ << k_indent << "syscall\n";
         } else if (name == "putint") {
             LoadValueToReg(inst->GetArg(0), "$a0");
             os_ << k_indent << "li    $v0, 1\n";
@@ -331,7 +388,9 @@ namespace mips {
                 continue;
             }
 
-            // 按依赖拓扑序：若 phi2 的 incoming 是 phi1，则 phi1 先写
+            // 按依赖拓扑序：若 phi_A 的 incoming 是 phi_B（同块），必须先写 A 再写 B，否则读 B
+            // 时已被覆盖。 “生产者”p.first 可加入 sorted 仅当所有“接收者”(q 满足 q.second==p.first)
+            // 已入 sorted。
             std::vector<std::pair<const ir::PhiInst*, const ir::Value*>> sorted;
             std::set<const ir::PhiInst*> phis_in_succ;
             for (const auto& p : edge_phis) {
@@ -346,17 +405,21 @@ namespace mips {
                         }) != sorted.end()) {
                         continue;
                     }
-                    const ir::Value* val = p.second;
-                    // 若 incoming 是同一后继块里的另一 phi，该 phi 必须先已在 sorted 中
-                    auto* incoming_phi = dynamic_cast<const ir::PhiInst*>(val);
-                    if (incoming_phi && phis_in_succ.count(incoming_phi)) {
-                        bool dep_ready = std::find_if(sorted.begin(), sorted.end(),
-                                                      [incoming_phi](const auto& x) {
-                                                          return x.first == incoming_phi;
-                                                      }) != sorted.end();
-                        if (!dep_ready) {
+                    // 若存在 (phi_A, p.first)：即有人从 p.first 接收，则必须先写 phi_A 再写 p.first
+                    bool all_receivers_of_me_ready = true;
+                    for (const auto& q : edge_phis) {
+                        if (q.second != p.first) {
                             continue;
                         }
+                        if (std::find_if(sorted.begin(), sorted.end(), [&q](const auto& x) {
+                                return x.first == q.first;
+                            }) == sorted.end()) {
+                            all_receivers_of_me_ready = false;
+                            break;
+                        }
+                    }
+                    if (!all_receivers_of_me_ready) {
+                        continue;
                     }
                     sorted.push_back(p);
                     added = true;
