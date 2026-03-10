@@ -1,8 +1,8 @@
 # MIPS 后端模块化重构方案
 
-**日期**: 2026-03-10  
-**阶段**: MIPS 初版完成 → 优化前的代码整理  
-**目标**: 在不改变语义的前提下，将现有 MIPS 后端代码重构为清晰的模块结构，并为后续优化（寄存器分配、窥孔优化等）预留友好接口  
+**日期**: 2026-03-10
+**阶段**: MIPS 初版完成 → 优化前的代码整理
+**目标**: 在不改变语义的前提下，将现有 MIPS 后端代码重构为清晰的模块结构，并为后续优化（寄存器分配、窥孔优化等）预留友好接口
 **前置状态**: 初版 MIPS 代码生成已通过全部测试样例
 
 ---
@@ -236,17 +236,17 @@ private:
 namespace mips {
 
 struct ValueLocation {
-    enum Kind { kStack, kRegister };
+    enum Kind { STACK, REGISTER };
 
     Kind kind;
-    int stack_offset;        // kind == kStack 时有效
-    std::string reg_name;    // kind == kRegister 时有效（如 "$s0"）
+    int stack_offset;        // kind == STACK 时有效
+    std::string reg_name;    // kind == REGISTER 时有效（如 "$s0"）
 
     static ValueLocation OnStack(int offset) {
-        return {kStack, offset, {}};
+        return {STACK, offset, {}};
     }
     static ValueLocation InRegister(const std::string& reg) {
-        return {kRegister, 0, reg};
+        return {REGISTER, 0, reg};
     }
 };
 
@@ -254,8 +254,8 @@ struct ValueLocation {
 ```
 
 **要点**：
-- 初版中所有 Value 都是 `kStack`，行为与现在完全一致
-- 当寄存器分配器上线后，部分 Value 变为 `kRegister`
+- 初版中所有 Value 都是 `STACK`，行为与现在完全一致
+- 当寄存器分配器上线后，部分 Value 变为 `REGISTER`
 - `LoadValueToReg` 和 `StoreRegToValue` 根据 `ValueLocation::kind` 分支处理
 - 这是连接"全栈分配"和"寄存器分配"的关键桥梁
 
@@ -534,7 +534,7 @@ void InstructionEmitter::LoadValueToReg(const ir::Value* val,
     // ... GlobalVar, AllocaInst 等特殊情况
 
     ValueLocation loc = frame_.GetLocation(val);
-    if (loc.kind == ValueLocation::kRegister) {
+    if (loc.kind == ValueLocation::REGISTER) {
         if (loc.reg_name != reg) {
             writer_.EmitMove(reg, loc.reg_name);
         }
@@ -544,7 +544,7 @@ void InstructionEmitter::LoadValueToReg(const ir::Value* val,
 }
 ```
 
-初版中 `ValueLocation` 全部是 `kStack`，行为与现在完全一致。当寄存器分配器启用后，部分 Value 的 `ValueLocation` 变为 `kRegister`，自动生成 `move` 而非 `lw`。
+初版中 `ValueLocation` 全部是 `STACK`，行为与现在完全一致。当寄存器分配器启用后，部分 Value 的 `ValueLocation` 变为 `REGISTER`，自动生成 `move` 而非 `lw`。
 
 ### 4.3 窥孔优化预留
 
@@ -658,10 +658,10 @@ emitter.Emit();
 #### S7：新增 ValueLocation
 
 1. 创建 `include/mips/ValueLocation.h`
-2. `StackFrame::GetLocation()` 返回 `ValueLocation`（初版全部为 `kStack`）
+2. `StackFrame::GetLocation()` 返回 `ValueLocation`（初版全部为 `STACK`）
 3. `InstructionEmitter::LoadValueToReg` 改为基于 `ValueLocation` 分支
 
-**验证**：diff mips.txt（初版全是 kStack，行为不变）。
+**验证**：diff mips.txt（初版全是 STACK，行为不变）。
 
 #### S8：代码清理
 
@@ -690,7 +690,7 @@ emitter.Emit();
 | MipsEmitter | ~20 | ~90 | 顶层驱动 |
 | **合计** | **~230** | **~610** | |
 
-重构前：头文件 64 行，实现 557 行，共 621 行。  
+重构前：头文件 64 行，实现 557 行，共 621 行。
 重构后：头文件 ~230 行，实现 ~610 行，共 ~840 行。
 
 行数增长约 35%，主要来自模块边界（头文件声明、构造函数参数传递）和新增的 `AsmWriter` / `ValueLocation` / `MipsOptions` 基础设施。这些增长换来的是：
@@ -775,7 +775,7 @@ diff 结果必须为空（即输出完全一致）。
 | 重构引入隐蔽 bug | 生成的 MIPS 错误 | 每步 diff + MARS 验证 |
 | 模块边界传参过多 | 代码冗余感增加 | 控制模块数量，不过度拆分 |
 | AsmWriter 输出格式与原版不一致 | diff 失败 | AsmWriter 的格式化严格对齐原版（空格数、换行位置） |
-| ValueLocation 引入后 LoadValueToReg 分支增多 | 初版复杂度增加 | 初版 ValueLocation 全为 kStack，新分支实际不执行 |
+| ValueLocation 引入后 LoadValueToReg 分支增多 | 初版复杂度增加 | 初版 ValueLocation 全为 STACK，新分支实际不执行 |
 
 ---
 

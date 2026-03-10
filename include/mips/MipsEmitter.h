@@ -5,8 +5,9 @@
 #pragma once
 
 #include "ir/Module.h"
+#include "mips/AsmWriter.h"
 #include "mips/MipsOptions.h"
-#include <iostream>
+#include <ostream>
 
 namespace mips {
 
@@ -16,7 +17,7 @@ namespace mips {
         void Emit();
 
     private:
-        std::ostream& os_;
+        AsmWriter writer_;
         const ir::Module& module_;
         MipsOptions options_;
 

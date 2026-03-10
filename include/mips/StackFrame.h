@@ -13,6 +13,7 @@
 
 #include "ir/Function.h"
 #include "ir/Instruction.h"
+#include "mips/ValueLocation.h"
 #include <unordered_map>
 
 namespace mips {
@@ -33,6 +34,13 @@ namespace mips {
 
         /// Return true if @p val has an assigned stack slot.
         bool HasSlot(const ir::Value* val) const;
+
+        /// Return the ValueLocation for @p val.
+        /// Currently always STACK; when register allocation is active,
+        /// some Values will return REGISTER.
+        ValueLocation GetLocation(const ir::Value* val) const {
+            return ValueLocation::OnStack(GetOffset(val));
+        }
 
     private:
         const ir::Function& func_;

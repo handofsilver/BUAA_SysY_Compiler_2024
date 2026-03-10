@@ -9,7 +9,7 @@ namespace mips {
 
     MipsEmitter::MipsEmitter(std::ostream& os, const ir::Module& module,
                              const MipsOptions& options) :
-    os_(os),
+    writer_(os),
     module_(module),
     options_(options) {}
 
@@ -23,10 +23,16 @@ namespace mips {
     // =========================================================================
 
     void MipsEmitter::EmitDataSegment() {
-        os_ << ".data\n";
+        writer_.EmitDirective(".data");
 
         for (const auto& global : module_.GetGlobalVars()) {
-            os_ << kIndent << GlobalLabel(global->GetName()) << ": ";
+            // Emit the label with indentation inline (label is part of data line).
+            // We use the raw stream via a local lambda to match the original format:
+            //   "    label: .word ...\n"
+            // AsmWriter::EmitLabel() emits "label:\n" (no indent, block labels).
+            // Data labels are different: they appear indented on the same line as
+            // the initializer, so we write them directly here.
+            const std::string kLabel = GlobalLabel(global->GetName());
 
             if (global->IsArray()) {
                 ir::ArrayType* arr_type = global->GetArrayType();
@@ -41,7 +47,7 @@ namespace mips {
                 auto* ca = dynamic_cast<ir::ConstantArray*>(init);
 
                 if (is_i8) {
-                    // Char array: emit .asciiz or .space.
+                    // Char array: emit .asciiz for initialized strings, .space for zero-only.
                     if (ca) {
                         const auto& elts = ca->GetElements();
                         assert(elts.size() == arr_size &&
@@ -51,7 +57,7 @@ namespace mips {
                             auto* ci = dynamic_cast<ir::ConstantInt*>(elts[i]);
                             int64_t v = ci ? ci->GetValue() : 0;
                             if (v == 0) {
-                                break;
+                                break; // Null terminator; stop here.
                             }
                             char c = static_cast<char>(v);
                             if (c == '\\') {
@@ -64,9 +70,9 @@ namespace mips {
                                 s += c;
                             }
                         }
-                        os_ << ".asciiz \"" << s << "\"\n";
+                        writer_.EmitInsn(kLabel + ": .asciiz \"" + s + "\"");
                     } else {
-                        os_ << ".space " << arr_size << "\n";
+                        writer_.EmitInsn(kLabel + ": .space " + std::to_string(arr_size));
                     }
                 } else {
                     // Int array: emit .word list or .space.
@@ -74,31 +80,31 @@ namespace mips {
                         const auto& elts = ca->GetElements();
                         assert(elts.size() == arr_size &&
                                "Global array initializer must be zero-padded");
-                        os_ << ".word ";
+                        std::string line = kLabel + ": .word ";
                         for (unsigned i = 0; i < arr_size; ++i) {
                             if (i != 0) {
-                                os_ << ", ";
+                                line += ", ";
                             }
                             auto* ci = dynamic_cast<ir::ConstantInt*>(elts[i]);
-                            os_ << (ci ? ci->GetValue() : 0);
+                            line += std::to_string(ci ? ci->GetValue() : 0);
                         }
-                        os_ << "\n";
+                        writer_.EmitInsn(line);
                     } else {
-                        os_ << ".space " << (4 * arr_size) << "\n";
+                        writer_.EmitInsn(kLabel + ": .space " + std::to_string(4 * arr_size));
                     }
                 }
             } else {
                 // Scalar global.
                 ir::Constant* init = global->GetInitializer();
                 if (auto* ci = dynamic_cast<ir::ConstantInt*>(init)) {
-                    os_ << ".word " << ci->GetValue() << "\n";
+                    writer_.EmitInsn(kLabel + ": .word " + std::to_string(ci->GetValue()));
                 } else {
-                    os_ << ".word 0\n";
+                    writer_.EmitInsn(kLabel + ": .word 0");
                 }
             }
         }
 
-        os_ << "\n";
+        writer_.EmitBlankLine();
     }
 
     // =========================================================================
@@ -106,17 +112,18 @@ namespace mips {
     // =========================================================================
 
     void MipsEmitter::EmitTextSegment() {
-        os_ << ".text\n";
-        os_ << "__start:\n";
-        os_ << kIndent << "jal   main\n";
-        os_ << kIndent << "li    $v0, 10\n";
-        os_ << kIndent << "syscall\n\n";
+        writer_.EmitDirective(".text");
+        writer_.EmitLabel("__start");
+        writer_.EmitInsn("jal   main");
+        writer_.EmitLi("$v0", 10);
+        writer_.EmitSyscall();
+        writer_.EmitBlankLine();
 
         for (const auto& func : module_.GetFunctions()) {
             if (func->GetBlocks().empty()) {
-                continue; // Skip external declarations. i.e. getint, putint, etc.
+                continue; // Skip external declarations (getint, putint, etc.).
             }
-            FunctionEmitter fe(os_, *func);
+            FunctionEmitter fe(writer_, *func, options_);
             fe.Emit();
         }
     }
