@@ -18,11 +18,18 @@
 
 #include "pass/Pass.h"
 
+namespace ir {
+    class Module;
+}
+
 namespace pass {
 
     class Mem2RegPass : public FunctionPass {
     public:
         bool Run(ir::Function& func) override;
+
+        /** @brief Run with module; when given, use-before-def loads are replaced with constant 0. */
+        bool Run(ir::Function& func, ir::Module* module);
 
         std::string_view GetName() const override {
             return "mem2reg";

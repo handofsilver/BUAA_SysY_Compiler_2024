@@ -76,7 +76,7 @@ int main() {
                     for (auto& func : result.module->GetFunctions()) {
                         // Skip external declarations (no basic blocks).
                         if (!func->GetBlocks().empty()) {
-                            mem2reg.Run(*func);
+                            mem2reg.Run(*func, result.module.get());
                         }
                     }
                 }
