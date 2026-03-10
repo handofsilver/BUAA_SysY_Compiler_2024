@@ -21,40 +21,10 @@
 
 #include <algorithm>
 #include <cassert>
-#include <chrono>
-#include <fstream>
 #include <queue>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-
-// #region agent log
-namespace {
-    static void DebugLog(const char* hypothesisId, const char* location, const char* message,
-                         int data_int = 0, void* data_ptr = nullptr) {
-        std::ofstream f(".cursor/debug-7a78fe.log", std::ios::app);
-        if (!f)
-            return;
-        f << "{\"sessionId\":\"7a78fe\",\"hypothesisId\":\"" << hypothesisId << "\",\"location\":\""
-          << location << "\",\"message\":\"" << message << "\",\"timestamp\":"
-          << std::chrono::duration_cast<std::chrono::milliseconds>(
-                 std::chrono::system_clock::now().time_since_epoch())
-                 .count();
-        if (data_int != 0 || data_ptr != nullptr) {
-            f << ",\"data\":{";
-            if (data_int != 0)
-                f << "\"int\":" << data_int;
-            if (data_ptr != nullptr) {
-                if (data_int != 0)
-                    f << ",";
-                f << "\"ptr\":\"" << data_ptr << "\"";
-            }
-            f << "}";
-        }
-        f << "}\n";
-    }
-} // namespace
-// #endregion
 
 namespace pass {
 
@@ -266,12 +236,6 @@ namespace pass {
                 for (ir::AllocaInst* alloca : ctx.allocas) {
                     if (load->GetPointerOperand() == alloca) {
                         auto& stack = ctx.current_val[alloca];
-                        // #region agent log
-                        if (stack.empty()) {
-                            DebugLog("H1", "Mem2Reg.cpp:RenameBlock",
-                                     "load_stack_empty_before_RAUW", 0, static_cast<void*>(load));
-                        }
-                        // #endregion
                         if (!stack.empty()) {
                             load->ReplaceAllUsesWith(stack.back());
                         } else if (ctx.module) {
@@ -314,12 +278,6 @@ namespace pass {
 
         // ── Fill incoming values for phi nodes in each CFG successor.
         for (ir::BasicBlock* succ : ctx.cfg.GetSuccs(bb)) {
-            // #region agent log
-            if (succ == nullptr) {
-                DebugLog("H3", "Mem2Reg.cpp:RenameBlock", "succ_is_null", 0,
-                         static_cast<void*>(bb));
-            }
-            // #endregion
             for (ir::AllocaInst* alloca : ctx.allocas) {
                 auto phi_it = ctx.phi_map.find(alloca);
                 // If the alloca is not in the phi_map, it means it generated no phi nodes.
@@ -350,12 +308,6 @@ namespace pass {
         auto children_it = ctx.dom.children.find(bb);
         if (children_it != ctx.dom.children.end()) {
             for (ir::BasicBlock* child : children_it->second) {
-                // #region agent log
-                if (child == nullptr) {
-                    DebugLog("H4", "Mem2Reg.cpp:RenameBlock", "child_is_null", 0,
-                             static_cast<void*>(bb));
-                }
-                // #endregion
                 RenameBlock(child, ctx);
             }
         }
@@ -378,20 +330,14 @@ namespace pass {
     }
 
     bool Mem2RegPass::Run(ir::Function& func, ir::Module* module) {
-        // #region agent log
-        DebugLog("H4", "Mem2Reg.cpp:Run", "run_enter", static_cast<int>(func.GetBlocks().size()));
-        // #endregion
         if (func.GetBlocks().empty()) {
             return false;
         }
 
         // ── Step 1–3: Analysis
         CFGInfo cfg = BuildCFG(func);
-        DebugLog("H4", "Mem2Reg.cpp:Run", "after_cfg");
         DomTreeInfo dom = BuildDomTree(func, cfg);
-        DebugLog("H4", "Mem2Reg.cpp:Run", "after_dom");
         DomFrontierInfo df = ComputeDomFrontier(func, cfg, dom);
-        DebugLog("H4", "Mem2Reg.cpp:Run", "after_df");
 
         // ── Step 4: Collect promotable allocas
         std::vector<ir::AllocaInst*> allocas = CollectPromotableAllocas(func);
@@ -428,13 +374,7 @@ namespace pass {
         RenameBlock(func.GetBlocks().front().get(), ctx);
 
         // ── Step 7: Erase dead loads and stores collected during rename.
-        // #region agent log
-        DebugLog("H5", "Mem2Reg.cpp:Run", "before_erase_loop", static_cast<int>(to_erase.size()));
-        // #endregion
         for (ir::Instruction* inst : to_erase) {
-            // #region agent log
-            DebugLog("H5", "Mem2Reg.cpp:Run", "erase_inst", 0, static_cast<void*>(inst));
-            // #endregion
             EraseFromParent(inst);
         }
         // Erase the alloca instructions themselves.

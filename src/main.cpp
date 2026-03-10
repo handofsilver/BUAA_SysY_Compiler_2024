@@ -46,7 +46,7 @@ int main() {
         const bool kEmitSymbolOutput = true;    /* semantic analysis: symbol.txt */
         const bool kEmitLLVMIROutput = true;    /* intermediate code(LLVM IR): llvm_ir.txt */
         const bool kEnableMem2Reg = true;       /* IR optimization(Mem2Reg Pass): mem2reg   */
-        const bool kEmitMIPSOutput = false;     /* target code(MIPS): mips.txt */
+        const bool kEmitMIPSOutput = true;      /* target code(MIPS): mips.txt */
         const bool kRenumberSSAForPrint = true; /* false = use original IR names (debug) */
 
         CompilerResult result =

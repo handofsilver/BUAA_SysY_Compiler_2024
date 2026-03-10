@@ -18,8 +18,6 @@
 #include "ir/Instruction.h" // BranchInst, ReturnInst
 
 #include <cassert>
-#include <chrono>
-#include <fstream>
 #include <stack>
 #include <unordered_set>
 
@@ -241,20 +239,6 @@ namespace pass {
                 continue;
             }
 
-            // #region agent log
-            if (dom.idom.count(y) == 0) {
-                std::ofstream f(".cursor/debug-7a78fe.log", std::ios::app);
-                if (f) {
-                    f << "{\"sessionId\":\"7a78fe\",\"hypothesisId\":\"H2\",\"location\":\"DomTree."
-                         "cpp:ComputeDomFrontier\","
-                         "\"message\":\"block_not_in_idom\",\"timestamp\":"
-                      << std::chrono::duration_cast<std::chrono::milliseconds>(
-                             std::chrono::system_clock::now().time_since_epoch())
-                             .count()
-                      << ",\"data\":{\"ptr\":\"" << static_cast<void*>(y) << "\"}}\n";
-                }
-            }
-            // #endregion
             ir::BasicBlock* idom_y = dom.idom.at(y);
 
             for (ir::BasicBlock* x : preds) {

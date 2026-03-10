@@ -305,6 +305,11 @@ namespace mips {
     // =========================================================================
 
     void FunctionEmitter::LoadValueToReg(const ir::Value* val, const std::string& reg) {
+        // Phi incoming can be nullptr (undef) from Mem2Reg; no stack slot exists.
+        if (val == nullptr) {
+            os_ << kIndent << "li    " << reg << ", 0\n";
+            return;
+        }
         if (auto* ci = dynamic_cast<const ir::ConstantInt*>(val)) {
             os_ << kIndent << "li    " << reg << ", " << ci->GetValue() << "\n";
         } else if (auto* gv = dynamic_cast<const ir::GlobalVar*>(val)) {
