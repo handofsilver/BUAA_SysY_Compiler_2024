@@ -3,31 +3,30 @@
 #include "ir/GlobalVar.h"
 #include "ir/Type.h"
 #include "mips/FunctionEmitter.h"
-#include <algorithm>
+#include "mips/MipsCommon.h"
 
 namespace mips {
 
-    namespace {
-        const char* k_indent = "    "; // 4 spaces for instructions under a label
-
-        std::string GlobalLabel(std::string name) {
-            // 对于if.true.x等标签直接删除所有.为_
-            // 特别的，LLVM IR中字符串全局变量是.str.0等，删除开头的.
-            std::replace(name.begin(), name.end(), '.', '_');
-            return (name[0] == '_' ? "global" : "global_") + name;
-        }
-    } // namespace
+    MipsEmitter::MipsEmitter(std::ostream& os, const ir::Module& module,
+                             const MipsOptions& options) :
+    os_(os),
+    module_(module),
+    options_(options) {}
 
     void MipsEmitter::Emit() {
         EmitDataSegment();
         EmitTextSegment();
     }
 
+    // =========================================================================
+    // .data segment
+    // =========================================================================
+
     void MipsEmitter::EmitDataSegment() {
         os_ << ".data\n";
 
         for (const auto& global : module_.GetGlobalVars()) {
-            os_ << k_indent << GlobalLabel(global->GetName()) << ": ";
+            os_ << kIndent << GlobalLabel(global->GetName()) << ": ";
 
             if (global->IsArray()) {
                 ir::ArrayType* arr_type = global->GetArrayType();
@@ -35,20 +34,21 @@ namespace mips {
 
                 unsigned arr_size = arr_type->GetNumElements();
                 ir::Type* elem_ty = arr_type->GetElementType();
-                ir::IntegerType* it = dynamic_cast<ir::IntegerType*>(elem_ty);
-                bool is_i8_array = (it && it->GetBits() == 8);
+                auto* int_ty = dynamic_cast<ir::IntegerType*>(elem_ty);
+                bool is_i8 = (int_ty && int_ty->GetBits() == 8);
 
                 ir::Constant* init = global->GetInitializer();
-                ir::ConstantArray* ca = dynamic_cast<ir::ConstantArray*>(init);
-                if (is_i8_array) {
-                    // 字符串/char 数组：.asciiz "..." 或 .space n
+                auto* ca = dynamic_cast<ir::ConstantArray*>(init);
+
+                if (is_i8) {
+                    // Char array: emit .asciiz or .space.
                     if (ca) {
                         const auto& elts = ca->GetElements();
                         assert(elts.size() == arr_size &&
-                               "global array initializer must be zero-padded");
+                               "Global array initializer must be zero-padded");
                         std::string s;
                         for (size_t i = 0; i < elts.size(); ++i) {
-                            ir::ConstantInt* ci = dynamic_cast<ir::ConstantInt*>(elts[i]);
+                            auto* ci = dynamic_cast<ir::ConstantInt*>(elts[i]);
                             int64_t v = ci ? ci->GetValue() : 0;
                             if (v == 0) {
                                 break;
@@ -69,16 +69,17 @@ namespace mips {
                         os_ << ".space " << arr_size << "\n";
                     }
                 } else {
+                    // Int array: emit .word list or .space.
                     if (ca) {
                         const auto& elts = ca->GetElements();
                         assert(elts.size() == arr_size &&
-                               "global array initializer must be zero-padded");
+                               "Global array initializer must be zero-padded");
                         os_ << ".word ";
                         for (unsigned i = 0; i < arr_size; ++i) {
                             if (i != 0) {
                                 os_ << ", ";
                             }
-                            ir::ConstantInt* ci = dynamic_cast<ir::ConstantInt*>(elts[i]);
+                            auto* ci = dynamic_cast<ir::ConstantInt*>(elts[i]);
                             os_ << (ci ? ci->GetValue() : 0);
                         }
                         os_ << "\n";
@@ -87,8 +88,9 @@ namespace mips {
                     }
                 }
             } else {
+                // Scalar global.
                 ir::Constant* init = global->GetInitializer();
-                if (ir::ConstantInt* ci = dynamic_cast<ir::ConstantInt*>(init)) {
+                if (auto* ci = dynamic_cast<ir::ConstantInt*>(init)) {
                     os_ << ".word " << ci->GetValue() << "\n";
                 } else {
                     os_ << ".word 0\n";
@@ -99,22 +101,23 @@ namespace mips {
         os_ << "\n";
     }
 
+    // =========================================================================
+    // .text segment
+    // =========================================================================
+
     void MipsEmitter::EmitTextSegment() {
         os_ << ".text\n";
         os_ << "__start:\n";
-        os_ << k_indent << "jal   main\n";
-        os_ << k_indent << "li    $v0, 10\n";
-        os_ << k_indent << "syscall\n\n";
+        os_ << kIndent << "jal   main\n";
+        os_ << kIndent << "li    $v0, 10\n";
+        os_ << kIndent << "syscall\n\n";
 
         for (const auto& func : module_.GetFunctions()) {
             if (func->GetBlocks().empty()) {
-                continue; // 跳过外部声明（如 getint）
+                continue; // Skip external declarations. i.e. getint, putint, etc.
             }
             FunctionEmitter fe(os_, *func);
-            fe.BuildStackFrame();
-            fe.EmitPrologue();
-            fe.EmitBody();
-            // Epilogue 已在 EmitBody 中每条 ReturnInst 后输出，此处不再调用
+            fe.Emit();
         }
     }
 

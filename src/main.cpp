@@ -46,7 +46,7 @@ int main() {
         const bool kEmitSymbolOutput = true;    /* semantic analysis: symbol.txt */
         const bool kEmitLLVMIROutput = true;    /* intermediate code(LLVM IR): llvm_ir.txt */
         const bool kEnableMem2Reg = true;       /* IR optimization(Mem2Reg Pass): mem2reg   */
-        const bool kEmitMIPSOutput = true;      /* target code(MIPS): mips.txt */
+        const bool kEmitMIPSOutput = false;     /* target code(MIPS): mips.txt */
         const bool kRenumberSSAForPrint = true; /* false = use original IR names (debug) */
 
         CompilerResult result =
@@ -85,7 +85,10 @@ int main() {
             }
             if (kEmitMIPSOutput && result.module) {
                 std::ofstream mips_out("mips.txt");
-                mips::MipsEmitter emitter(mips_out, *result.module);
+                mips::MipsOptions mips_opts;
+                // mips_opts.enable_reg_alloc = kEnableRegAlloc;  // TODO: wire up
+                // mips_opts.enable_peephole  = kEnablePeephole;  // TODO: wire up
+                mips::MipsEmitter emitter(mips_out, *result.module, mips_opts);
                 emitter.Emit();
             }
         }

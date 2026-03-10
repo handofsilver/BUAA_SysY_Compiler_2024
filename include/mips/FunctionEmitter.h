@@ -1,20 +1,38 @@
+/**
+ * @file FunctionEmitter.h
+ * @brief Per-function MIPS code emitter: prologue, body (instruction selection), epilogue.
+ *
+ * Orchestrates StackFrame (layout) and instruction emission for one ir::Function.
+ * The single public entry point is Emit().
+ */
 #pragma once
 
 #include "ir/Function.h"
 #include "ir/Instruction.h"
-#include <unordered_map>
+#include "mips/StackFrame.h"
+#include <ostream>
 
 namespace mips {
 
     class FunctionEmitter {
     public:
-        FunctionEmitter(std::ostream& os, const ir::Function& func) : os_(os), func_(func) {}
+        FunctionEmitter(std::ostream& os, const ir::Function& func);
 
-        void BuildStackFrame();
+        /// Build stack frame and emit the complete function (prologue + body).
+        void Emit();
+
+    private:
+        std::ostream& os_;
+        const ir::Function& func_;
+        StackFrame frame_;
+
+        // --- Structure ---
         void EmitPrologue();
         void EmitBody();
         void EmitEpilogue();
 
+        // --- Instruction selection ---
+        void EmitInstruction(const ir::Instruction* inst, const ir::BasicBlock* block);
         void EmitBinaryInst(const ir::BinaryInst* inst);
         void EmitLoadInst(const ir::LoadInst* inst);
         void EmitStoreInst(const ir::StoreInst* inst);
@@ -25,19 +43,16 @@ namespace mips {
         void EmitZextInst(const ir::ZextInst* inst);
         void EmitTruncInst(const ir::TruncInst* inst);
         void EmitCallInst(const ir::CallInst* inst);
+        void EmitLibraryCall(const ir::CallInst* inst);
 
-        void EmitLibraryFunctionCall(const ir::CallInst* inst);
-
+        /// Load any ir::Value into the given MIPS register.
+        /// Handles ConstantInt (li), GlobalVar (la), AllocaInst (addiu $sp+offset),
+        /// and general stack slots (lw).
         void LoadValueToReg(const ir::Value* val, const std::string& reg);
 
-        /** 在块 P 的 BranchInst 之前发射：P 到各后继 S 的 phi move（按依赖顺序） */
+        /// Emit phi-resolution moves for all edges leaving @p pred_block.
         void EmitPhiMovesBeforeBranch(const ir::BasicBlock* pred_block,
                                       const ir::BranchInst* branch);
-
-    private:
-        std::ostream& os_;
-        const ir::Function& func_;
-        int frame_size_ = 0;
-        std::unordered_map<const ir::Value*, int> value_offset_;
     };
+
 } // namespace mips
