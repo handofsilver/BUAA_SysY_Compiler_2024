@@ -8,7 +8,7 @@
 
 > BUAA School of Computer Science and Engineering - Compiler Principles Course Project - SysY Language Compiler (C++17 Refactored Version)
 
-This repository documents the refactoring of a SysY compiler from Java to C++. Development is organized by stages. **Lexical analysis**, **syntax analysis**, **semantic analysis**, and **intermediate code generation (including Mem2Reg optimization)** are all complete. The driver reads `testfile.txt`, runs the full frontend pipeline followed by the Mem2Reg SSA promotion pass, and writes a fully-SSA-form `llvm_ir.txt` (no errors) or `error.txt` (errors present).
+This repository documents the refactoring of a SysY compiler from Java to C++. Development is organized by stages. All functional stages are complete: lexical analysis, syntax analysis, semantic analysis, intermediate code generation (including Mem2Reg optimization), and **MIPS target code generation**. The final **code optimization** stage is currently in progress. The driver reads `testfile.txt`, runs the full compilation pipeline, and writes `llvm_ir.txt` (LLVM IR) and `mips.txt` (MIPS assembly, runnable in MARS 4.5) when no errors are present, or `error.txt` otherwise.
 
 ------
 
@@ -28,7 +28,7 @@ Given that improving the project inevitably required reviewing the original logi
 
 1.  **Architectural Completeness**
 
-    The original Java version halted at LLVM IR generation due to time constraints and suffered from tight coupling. This refactoring aims to implement **MIPS assembly generation** and **backend optimization**, decoupling modules to build a robust and well-architected compiler.
+    The original Java version halted at LLVM IR generation due to time constraints and suffered from tight coupling. This refactoring aims to implement **MIPS assembly generation** and **code optimization** (IR-level + MIPS-level), decoupling modules to build a robust and well-architected compiler.
 
 2.  **Deep Dive into Modern C++**
 
@@ -51,19 +51,20 @@ This README will be dynamically updated to reflect development progress.
 | **Semantics / Symbol Table** | `analyzer` | ✅ Completed | Symbol table, scopes (RAII), Visitor traversal; outputs `symbol.txt` / `error.txt`. |
 | **Intermediate Code** | `llvm_ir` | ✅ Completed | In-memory IR structure (Value/User), IRBuilder generation, outputs `llvm_ir.txt`. |
 | **IR Optimization** | `mem2reg` | ✅ Completed | **Mem2Reg Pass**: CFG construction, Cooper dominator tree, dominance frontier, φ-node insertion and SSA renaming; outputs fully-SSA-form `llvm_ir.txt`. |
-| **Target Code** | `mips` | ⏳ Pending | **Core goal**: MIPS generation + register allocation optimization. |
+| **Target Code** | `mips` | ✅ Completed | **MIPS backend**: full-stack allocation, instruction selection, calling convention, phi lowering; modular architecture, outputs `mips.txt`. |
+| **Code Optimization** | `optimize` | 🔧 In Progress | **IR + MIPS optimization**: constant folding, dead code elimination, multiply/divide strength reduction, peephole optimization, etc. |
 
 ------
 
 ## 📁 Project Structure
 
-The main pipeline is **Lexer → Parser → SemanticAnalyzer → IRGenVisitor → Mem2RegPass**. Final output: **no errors** → fully-SSA-form `llvm_ir.txt`; **any errors** → merged `error.txt` from all previous stages.
+The main pipeline is **Lexer → Parser → SemanticAnalyzer → IRGenVisitor → Mem2RegPass → MipsEmitter**. Final output: **no errors** → fully-SSA-form `llvm_ir.txt` + MIPS assembly `mips.txt`; **any errors** → merged `error.txt` from all previous stages.
 
 ```Plaintext
 .
 ├── CMakeLists.txt
 ├── src/
-│   ├── main.cpp              # Entry: read testfile.txt, execute to IR generation, write llvm_ir.txt / error.txt
+│   ├── main.cpp              # Entry: read testfile.txt, full compilation, write llvm_ir.txt + mips.txt / error.txt
 │   ├── Driver.cpp            # Main driver
 │   ├── Lexer.cpp
 │   ├── Parser.cpp            # Recursive descent + AST construction
@@ -95,10 +96,17 @@ The main pipeline is **Lexer → Parser → SemanticAnalyzer → IRGenVisitor �
 │   │   ├── IRScopeGuard.cpp
 │   │   ├── TypeMapping.cpp
 │   │   └── ConstExpEvaluator.cpp
-│   └── pass/                 # IR optimization passes
-│       ├── CFGBuilder.cpp
-│       ├── DomTree.cpp
-│       └── Mem2Reg.cpp
+│   ├── pass/                 # IR optimization passes
+│   │   ├── CFGBuilder.cpp
+│   │   ├── DomTree.cpp
+│   │   └── Mem2Reg.cpp
+│   └── mips/                 # MIPS backend code generation
+│       ├── MipsEmitter.cpp   # Top-level driver: .data / .text segments
+│       ├── FunctionEmitter.cpp # Per-function orchestrator: prologue + body
+│       ├── InstructionEmitter.cpp # Instruction selection: IR → MIPS sequences
+│       ├── StackFrame.cpp    # Stack frame layout and value offset computation
+│       ├── AsmWriter.cpp     # MIPS assembly output formatting
+│       └── MipsCommon.cpp    # Label generation and shared utilities
 ├── include/
 │   ├── Lexer.h
 │   ├── Token.h
@@ -134,11 +142,20 @@ The main pipeline is **Lexer → Parser → SemanticAnalyzer → IRGenVisitor �
 │   │   ├── TypeMapping.h
 │   │   ├── ConstExpEvaluator.h
 │   │   └── SSANameAllocator.h
-│   └── pass/                 # IR optimization pass headers
-│       ├── Pass.h
-│       ├── CFGBuilder.h
-│       ├── DomTree.h
-│       └── Mem2Reg.h
+│   ├── pass/                 # IR optimization pass headers
+│   │   ├── Pass.h
+│   │   ├── CFGBuilder.h
+│   │   ├── DomTree.h
+│   │   └── Mem2Reg.h
+│   └── mips/                 # MIPS backend headers
+│       ├── MipsEmitter.h     # Top-level driver
+│       ├── FunctionEmitter.h # Per-function orchestrator
+│       ├── InstructionEmitter.h # Instruction selection
+│       ├── StackFrame.h      # Stack frame layout
+│       ├── AsmWriter.h       # Assembly output helper
+│       ├── MipsCommon.h      # Shared utilities and constants
+│       ├── MipsOptions.h     # Compile options / optimization switches
+│       └── ValueLocation.h   # Value location abstraction (stack/register)
 └── docs/
     ├── ai_collab_notes/      # AI collaboration notes
     ├── course_info/          # Experiment requirements and course specs
@@ -149,13 +166,15 @@ The main pipeline is **Lexer → Parser → SemanticAnalyzer → IRGenVisitor �
     │   ├── requirement_5_codegen.md
     │   ├── 2024_SysY_grammar.md
     │   ├── 2024_SysY_detailed.md
-    │   └── llvm_course_guide.md
+    │   ├── llvm_course_guide.md
+    │   └── optimization_course_guide.md
     └── design_documents/     # Design documents
         ├── lexer.md
         ├── parser.md
         ├── semantic_analyzer.md
         ├── llvm_ir.md
-        └── mem2reg.md
+        ├── mem2reg.md
+        └── mips_backend.md
 ```
 
 ------
@@ -249,6 +268,29 @@ Building upon the Abstract Syntax Tree (AST) and the symbol table, a single **Vi
 
 ------
 
+## 🎯 MIPS Target Code Generation (MIPS Backend)
+
+### 1. Overview
+
+Building on the fully-SSA-form IR produced by Mem2Reg, the backend traverses `ir::Module` and translates each IR instruction into an equivalent MIPS assembly sequence, writing the result to `mips.txt` for execution in MARS 4.5.
+
+- **Full-stack allocation**: The initial version prioritizes correctness—every SSA Value is assigned a stack slot, with `$t0`–`$t3` used as scratch registers for operand shuttling. No register allocation is performed, but the architecture reserves a `ValueLocation` abstraction and `MipsOptions` switches for seamless future integration of graph-coloring register allocation.
+- **Modular architecture**: After AI-assisted refactoring, the original two-file implementation (MipsEmitter + FunctionEmitter) was decomposed into 8 single-responsibility modules—StackFrame (frame layout), InstructionEmitter (instruction selection), AsmWriter (output formatting), etc.—with clean, acyclic dependencies.
+- **Calling convention**: Args 0–3 via `$a0`–`$a3`, args 4+ pushed on stack by caller; return value in `$v0`; `$ra` saved/restored by callee.
+- **Phi lowering**: Moves are emitted at predecessor branches using topological sort to resolve parallel-copy write-clobber issues.
+
+### 2. I/O Specification (MIPS stage)
+
+| **Scenario** | **Input** | **Output file** | **Output format** |
+| :--- | :--- | :--- | :--- |
+| **Correct source** | `testfile.txt` | `mips.txt` | MIPS assembly text (.data + .text), directly runnable in MARS 4.5. |
+| **Errors present** | `testfile.txt` | `error.txt` | `LineNumber ErrorCode` (lex + parse + semantic merged; no code generation). |
+
+- See [Experiment 5 Requirements](docs/course_info/requirement_5_codegen.md).
+- The generated MIPS assembly has been verified against all test cases in `SysY_Test_2024/`.
+
+------
+
 ## 🛠️ Build and Run
 
 ### Requirements
@@ -267,9 +309,9 @@ cmake --build .
 
 ### Usage
 
-Place `testfile.txt` in the executable’s working directory (or set the IDE run configuration accordingly). The program runs **Lexer → Parser → SemanticAnalyzer** and produces:
+Place `testfile.txt` in the executable’s working directory (or set the IDE run configuration accordingly). The program runs the full pipeline **Lexer → Parser → SemanticAnalyzer → IRGenVisitor → Mem2Reg → MipsEmitter** and produces:
 
-- **No errors**: `symbol.txt` (scope id, identifier, type name). If parser output is enabled, `parser.txt` is also written.
+- **No errors**: `llvm_ir.txt` (fully-SSA-form LLVM IR) and `mips.txt` (MIPS assembly, runnable in MARS 4.5).
 - **Any errors**: `error.txt` (line number + error code; lex, parse, and semantic errors merged and sorted by line).
 
 ```Bash
@@ -313,6 +355,7 @@ Place `testfile.txt` in the executable’s working directory (or set the IDE run
 
 - [SysY Grammar](docs/course_info/2024_SysY_grammar.md), [SysY detailed definition](docs/course_info/2024_SysY_detailed.md)
 - [LLVM course guide](docs/course_info/llvm_course_guide.md)
+- [Optimization course guide](docs/course_info/optimization_course_guide.md)
 
 ### Design Documents
 
@@ -321,3 +364,5 @@ Place `testfile.txt` in the executable’s working directory (or set the IDE run
 - [Semantic analyzer design](docs/design_documents/semantic_analyzer.md)
 - [LLVM IR design](docs/design_documents/llvm_ir.md)
 - [Mem2Reg optimization design](docs/design_documents/mem2reg.md)
+- [MIPS backend design](docs/design_documents/mips_backend.md)
+- [Optimization phase plan](docs/ai_collab_notes/optimization/optimization_phase_plan_20260310.md)

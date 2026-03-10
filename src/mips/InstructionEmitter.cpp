@@ -205,23 +205,24 @@ namespace mips {
         // All argument loads must happen before $sp is adjusted;
         // otherwise lw offset($sp) would read from wrong slots.
 
-        // 1) Load args 5+ into temporaries (still using current $sp).
+        // 1) Store args 5+ one at a time to their final positions below
+        //    current $sp. Each arg is loaded into $t0 and immediately
+        //    written, avoiding the need for N temporary registers.
+        //    Target offset from current $sp: -kExtraSize + (i-4)*4.
+        //    After $sp adjustment in step 3, these become (i-4)*4($sp).
         if (kExtraSize > 0) {
             for (size_t i = 4; i < kNumArgs; ++i) {
-                LoadValueToReg(inst->GetArg(static_cast<int>(i)),
-                               "$t" + std::to_string(static_cast<int>(i - 4)));
+                LoadValueToReg(inst->GetArg(static_cast<int>(i)), "$t0");
+                writer_.EmitSwSp("$t0", -kExtraSize + static_cast<int>((i - 4) * 4));
             }
         }
         // 2) Load first 4 args into $a0-$a3 (still using current $sp).
         for (size_t i = 0; i < kNumArgs && i < 4u; ++i) {
             LoadValueToReg(inst->GetArg(static_cast<int>(i)), "$a" + std::to_string(i));
         }
-        // 3) Push stack space for args 5+, write them, then jal.
+        // 3) Adjust $sp to cover the pre-written arg area.
         if (kExtraSize > 0) {
             writer_.EmitAddiu("$sp", "$sp", -kExtraSize);
-            for (size_t i = 4; i < kNumArgs; ++i) {
-                writer_.EmitSwSp("$t" + std::to_string(i - 4), static_cast<int>((i - 4) * 4));
-            }
         }
 
         writer_.EmitInsn("jal   " + name);

@@ -8,7 +8,7 @@
 
 > 北航计算机学院编译原理课程实验 - SysY 语言编译器（C++17 重构版）
 
-本仓库记录了该编译器从 Java 版本迁移至 C++ 版本的重构过程。项目按实验阶段管理分支，当前已完成**词法分析**、**语法分析**、**语义分析**与**中间代码生成（含 Mem2Reg 优化）**阶段；主控读取 `testfile.txt`，经完整前端流水线后生成完全 SSA 形式的 LLVM IR，输出 `llvm_ir.txt`（无错误）或 `error.txt`（有错误）。
+本仓库记录了该编译器从 Java 版本迁移至 C++ 版本的重构过程。项目按实验阶段管理分支，当前已完成**词法分析**、**语法分析**、**语义分析**、**中间代码生成（含 Mem2Reg 优化）**与 **MIPS 目标代码生成**全部功能阶段，正在进行最后的**代码优化**阶段；主控读取 `testfile.txt`，经完整编译流水线后输出 `llvm_ir.txt`（LLVM IR）和 `mips.txt`（MIPS 汇编，可在 MARS 4.5 上运行），或 `error.txt`（有错误时）。
 
 ------
 
@@ -28,7 +28,7 @@
 
 1. **系统完整性补全**
 
-   原 Java 版本因彼时时间仓促，代码生成仅止步于 LLVM IR，且存在大量因赶工导致的架构耦合。本次重构旨在彻底完成 **MIPS 汇编生成**及**后端优化**，并重构不合理的模块交互逻辑，打造一个架构清晰的完整编译器。
+   原 Java 版本因彼时时间仓促，代码生成仅止步于 LLVM IR，且存在大量因赶工导致的架构耦合。本次重构旨在彻底完成 **MIPS 汇编生成**及**代码优化**（IR 级 + MIPS 级），并重构不合理的模块交互逻辑，打造一个架构清晰的完整编译器。
 
 2. **Modern C++ 深度实践**
 
@@ -51,19 +51,20 @@
 | **语义/符号表** | `analyzer` | ✅ 已完成 | 符号表、作用域（RAII）、Visitor 遍历；输出 `symbol.txt` / `error.txt`。   |
 | **中间代码**    | `llvm_ir`  | ✅ 已完成 | 基于内存的 IR 树形结构（Value/User）、IRBuilder 模式生成，输出 `llvm_ir.txt`。|
 | **IR 优化**     | `mem2reg`  | ✅ 已完成 | **Mem2Reg Pass**：CFG 构建、Cooper 支配树、支配边界、φ 节点插入与 SSA 重命名；输出完全 SSA 形式的 `llvm_ir.txt`。|
-| **目标代码**    | `mips`     | ⏳ 待开发 | **本次重构核心目标**：MIPS 生成 + 寄存器分配优化。                         |
+| **目标代码**    | `mips`     | ✅ 已完成 | **MIPS 后端**：全栈分配、指令选择、调用约定、Phi 下降；模块化架构，输出 `mips.txt`。|
+| **代码优化**    | `optimize` | 🔧 进行中 | **IR + MIPS 优化**：常量折叠、死代码消除、乘除强度削减、窥孔优化等。|
 
 ------
 
 ## 📁 项目结构
 
-当前主流程为 **Lexer → Parser → SemanticAnalyzer → IRGenVisitor → Mem2RegPass**；输出以**中间代码**为准：无错误时写完全 SSA 形式的 `llvm_ir.txt`，有错误时合并之前阶段错误写 `error.txt`。
+当前主流程为 **Lexer → Parser → SemanticAnalyzer → IRGenVisitor → Mem2RegPass → MipsEmitter**；无错误时写完全 SSA 形式的 `llvm_ir.txt` 与 MIPS 汇编 `mips.txt`，有错误时合并之前阶段错误写 `error.txt`。
 
 ```Plaintext
 .
 ├── CMakeLists.txt
 ├── src/
-│   ├── main.cpp              # 入口：读 testfile.txt，执行至 IR 生成，写 llvm_ir.txt / error.txt
+│   ├── main.cpp              # 入口：读 testfile.txt，完整编译，写 llvm_ir.txt + mips.txt / error.txt
 │   ├── Driver.cpp             # 主控流程
 │   ├── Lexer.cpp
 │   ├── Parser.cpp            # 递归下降 + AST 构造
@@ -95,10 +96,17 @@
 │   │   ├── IRScopeGuard.cpp
 │   │   ├── TypeMapping.cpp
 │   │   └── ConstExpEvaluator.cpp
-│   └── pass/                 # IR 优化 Pass
-│       ├── CFGBuilder.cpp
-│       ├── DomTree.cpp
-│       └── Mem2Reg.cpp
+│   ├── pass/                 # IR 优化 Pass
+│   │   ├── CFGBuilder.cpp
+│   │   ├── DomTree.cpp
+│   │   └── Mem2Reg.cpp
+│   └── mips/                 # MIPS 后端代码生成
+│       ├── MipsEmitter.cpp   # 顶层驱动：.data / .text 段
+│       ├── FunctionEmitter.cpp # 每函数编排：prologue + body
+│       ├── InstructionEmitter.cpp # 指令选择：IR → MIPS 序列
+│       ├── StackFrame.cpp    # 栈帧布局与 Value 偏移计算
+│       ├── AsmWriter.cpp     # MIPS 汇编输出格式化
+│       └── MipsCommon.cpp    # 标签生成等共享工具
 ├── include/
 │   ├── Lexer.h
 │   ├── Token.h
@@ -134,11 +142,20 @@
 │   │   ├── TypeMapping.h
 │   │   ├── ConstExpEvaluator.h
 │   │   └── SSANameAllocator.h
-│   └── pass/                 # IR 优化 Pass 头文件
-│       ├── Pass.h
-│       ├── CFGBuilder.h
-│       ├── DomTree.h
-│       └── Mem2Reg.h
+│   ├── pass/                 # IR 优化 Pass 头文件
+│   │   ├── Pass.h
+│   │   ├── CFGBuilder.h
+│   │   ├── DomTree.h
+│   │   └── Mem2Reg.h
+│   └── mips/                 # MIPS 后端头文件
+│       ├── MipsEmitter.h     # 顶层驱动
+│       ├── FunctionEmitter.h # 每函数编排
+│       ├── InstructionEmitter.h # 指令选择
+│       ├── StackFrame.h      # 栈帧布局
+│       ├── AsmWriter.h       # 汇编输出助手
+│       ├── MipsCommon.h      # 共享工具与常量
+│       ├── MipsOptions.h     # 编译选项 / 优化开关
+│       └── ValueLocation.h   # Value 位置抽象（栈/寄存器）
 └── docs/
     ├── ai_collab_notes/      # AI协作记录
     ├── course_info/          # 实验要求与课程规范
@@ -149,13 +166,15 @@
     │   ├── requirement_5_codegen.md
     │   ├── 2024_SysY_grammar.md
     │   ├── 2024_SysY_detailed.md
-    │   └── llvm_course_guide.md
+    │   ├── llvm_course_guide.md
+    │   └── optimization_course_guide.md
     └── design_documents/     # 设计文档
         ├── lexer.md
         ├── parser.md
         ├── semantic_analyzer.md
         ├── llvm_ir.md
-        └── mem2reg.md
+        ├── mem2reg.md
+        └── mips_backend.md
 ```
 
 ------
@@ -249,6 +268,29 @@
 
 ------
 
+## 🎯 MIPS 目标代码生成 (MIPS Backend)
+
+### 1. 功能概述
+
+在 Mem2Reg 产出的完全 SSA 形式 IR 基础上，遍历 `ir::Module`，将每条 IR 指令翻译为等价的 MIPS 汇编序列，写入 `mips.txt`，可在 MARS 4.5 上正确执行。
+
+- **全栈分配策略**：初版以正确性为唯一目标，每个 SSA Value 均分配栈槽，运算时临时借用 `$t0`–`$t3` 搬运。不做寄存器分配，但架构已预留 `ValueLocation` 抽象与 `MipsOptions` 优化开关，后续可无缝接入图着色寄存器分配。
+- **模块化架构**：经 AI 协作重构，从初版两文件（MipsEmitter + FunctionEmitter）拆分为 8 个单一职责模块——StackFrame（栈帧布局）、InstructionEmitter（指令选择）、AsmWriter（输出格式化）等，职责清晰、依赖无环。
+- **调用约定**：参数 0–3 通过 `$a0`–`$a3`，参数 4+ 由调用者在栈上传递；返回值 `$v0`；`$ra` 由被调函数保存/恢复。
+- **Phi 下降**：在前驱块跳转前通过拓扑排序发射 move，解决并行复制的写覆盖问题。
+
+### 2. 输入与输出规范（MIPS 阶段）
+
+| **场景**     | **输入**       | **输出文件**  | **输出内容格式**                                      |
+| ------------ | -------------- | ------------- | ----------------------------------------------------- |
+| **正确源程序** | `testfile.txt` | `mips.txt`    | MIPS 汇编文本（.data + .text），可直接在 MARS 4.5 中 Run。 |
+| **存在错误** | `testfile.txt` | `error.txt`   | `行号 错误类别码`（词法+语法+语义合并，无代码生成）。 |
+
+- 规范详见 [第五次实验要求](docs/course_info/requirement_5_codegen.md)。
+- 生成的 MIPS 汇编通过了 `SysY_Test_2024/` 下的全部测试样例验证。
+
+------
+
 ## 🛠️ 构建与运行
 
 ### 环境要求
@@ -269,9 +311,9 @@ cmake --build .
 
 ### 运行方式
 
-将 `testfile.txt` 放在可执行文件所在目录（或配置 IDE 工作目录）。程序执行 **Lexer → Parser → SemanticAnalyzer**，根据是否存在错误生成：
+将 `testfile.txt` 放在可执行文件所在目录（或配置 IDE 工作目录）。程序执行完整编译流水线 **Lexer → Parser → SemanticAnalyzer → IRGenVisitor → Mem2Reg → MipsEmitter**，根据是否存在错误生成：
 
-- **无错误**：`symbol.txt`（作用域序号、标识符、类型名）；若启用 Parser 输出则另有 `parser.txt`。
+- **无错误**：`llvm_ir.txt`（完全 SSA 形式的 LLVM IR）、`mips.txt`（MIPS 汇编，可在 MARS 4.5 中运行）。
 - **有错误**：`error.txt`（行号 + 错误码，词法/语法/语义合并并按行号排序）。
 
 ```Bash
@@ -315,6 +357,7 @@ cmake --build .
 
 - [SysY 文法](docs/course_info/2024_SysY_grammar.md)、[SysY 详细定义](docs/course_info/2024_SysY_detailed.md)
 - [LLVM 课程指导](docs/course_info/llvm_course_guide.md)
+- [代码优化课程教程](docs/course_info/optimization_course_guide.md)
 
 ### 设计文档
 
@@ -323,3 +366,5 @@ cmake --build .
 - [语义分析设计文档](docs/design_documents/semantic_analyzer.md)
 - [LLVM IR 设计文档](docs/design_documents/llvm_ir.md)
 - [Mem2Reg 优化设计文档](docs/design_documents/mem2reg.md)
+- [MIPS 后端设计文档](docs/design_documents/mips_backend.md)
+- [优化阶段规划](docs/ai_collab_notes/optimization/optimization_phase_plan_20260310.md)
