@@ -18,6 +18,7 @@
 #include "ir/Function.h"
 #include "ir/Instruction.h"
 #include "mips/AsmWriter.h"
+#include "mips/MipsOptions.h"
 #include "mips/StackFrame.h"
 
 namespace mips {
@@ -25,7 +26,8 @@ namespace mips {
     class InstructionEmitter {
     public:
         /// @p func is needed only for BlockLabel generation in branch emission.
-        InstructionEmitter(AsmWriter& writer, const StackFrame& frame, const ir::Function& func);
+        InstructionEmitter(AsmWriter& writer, const StackFrame& frame, const ir::Function& func,
+                           const MipsOptions& options);
 
         /// Dispatch @p inst to the appropriate EmitXxxInst method.
         /// @p block is the containing block (needed for phi-move resolution).
@@ -44,6 +46,7 @@ namespace mips {
         AsmWriter& writer_;
         const StackFrame& frame_;
         const ir::Function& func_;
+        const MipsOptions& options_;
 
         void EmitBinaryInst(const ir::BinaryInst* inst);
         void EmitLoadInst(const ir::LoadInst* inst);

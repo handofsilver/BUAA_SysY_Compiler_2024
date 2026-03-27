@@ -10,6 +10,30 @@
 namespace mips {
 
     namespace {
+        /// Try to read a Value as ConstantInt.
+        bool TryGetConstInt(const ir::Value* v, int64_t& out) {
+            auto* ci = dynamic_cast<const ir::ConstantInt*>(v);
+            if (!ci) {
+                return false;
+            }
+            out = ci->GetValue();
+            return true;
+        }
+
+        /// Return true iff x is a positive power of two, and set shift amount.
+        bool IsPositivePowerOfTwo(uint64_t x, int& out_shift) {
+            if (x == 0 || (x & (x - 1)) != 0) {
+                return false;
+            }
+            int shift = 0;
+            while (x > 1) {
+                x >>= 1;
+                ++shift;
+            }
+            out_shift = shift;
+            return true;
+        }
+
         /// Compute element size (bytes) for the pointee type of a GEP result.
         /// Returns 1 for i8 elements, 4 for i32 elements (default).
         int GepElementSizeBytes(const ir::GetElementPtrInst* inst) {
@@ -38,10 +62,11 @@ namespace mips {
     // =========================================================================
 
     InstructionEmitter::InstructionEmitter(AsmWriter& writer, const StackFrame& frame,
-                                           const ir::Function& func) :
+                                           const ir::Function& func, const MipsOptions& options) :
     writer_(writer),
     frame_(frame),
-    func_(func) {}
+    func_(func),
+    options_(options) {}
 
     // =========================================================================
     // Public dispatch
@@ -80,23 +105,161 @@ namespace mips {
     // =========================================================================
 
     void InstructionEmitter::EmitBinaryInst(const ir::BinaryInst* inst) {
-        LoadValueToReg(inst->GetLhs(), "$t0");
-        LoadValueToReg(inst->GetRhs(), "$t1");
-        switch (inst->GetOp()) {
-            case ir::BinaryOp::ADD: writer_.EmitInsn("addu  $t2, $t0, $t1"); break;
-            case ir::BinaryOp::SUB: writer_.EmitInsn("subu  $t2, $t0, $t1"); break;
-            case ir::BinaryOp::MUL: writer_.EmitInsn("mul   $t2, $t0, $t1"); break;
-            case ir::BinaryOp::DIV:
-                writer_.EmitInsn("div   $t0, $t1");
-                writer_.EmitInsn("mflo  $t2");
-                break;
-            case ir::BinaryOp::REM:
-                writer_.EmitInsn("div   $t0, $t1");
-                writer_.EmitInsn("mfhi  $t2");
-                break;
-            default: assert(false && "Unknown binary op");
+        // Generic (baseline) lowering path: keep old behavior exactly.
+        auto emit_generic = [&]() {
+            LoadValueToReg(inst->GetLhs(), "$t0");
+            LoadValueToReg(inst->GetRhs(), "$t1");
+            switch (inst->GetOp()) {
+                case ir::BinaryOp::ADD: writer_.EmitInsn("addu  $t2, $t0, $t1"); break;
+                case ir::BinaryOp::SUB: writer_.EmitInsn("subu  $t2, $t0, $t1"); break;
+                case ir::BinaryOp::MUL: writer_.EmitInsn("mul   $t2, $t0, $t1"); break;
+                case ir::BinaryOp::DIV:
+                    writer_.EmitInsn("div   $t0, $t1");
+                    writer_.EmitInsn("mflo  $t2");
+                    break;
+                case ir::BinaryOp::REM:
+                    writer_.EmitInsn("div   $t0, $t1");
+                    writer_.EmitInsn("mfhi  $t2");
+                    break;
+                default: assert(false && "Unknown binary op");
+            }
+        };
+
+        // O3 (conservative): mul/div strength reduction only.
+        // - No magic-number division.
+        // - No rem optimization.
+        // - Fall back to generic path whenever pattern is not confidently matched.
+        if (!options_.enable_mul_div_opt) {
+            emit_generic();
+            writer_.EmitSwSp("$t2", frame_.GetOffset(inst));
+            return;
         }
+
+        // -----------------------------
+        // MUL optimization (constant)
+        // -----------------------------
+        if (inst->GetOp() == ir::BinaryOp::MUL) {
+            int64_t lhs_c = 0;
+            int64_t rhs_c = 0;
+            bool lhs_is_c = TryGetConstInt(inst->GetLhs(), lhs_c);
+            bool rhs_is_c = TryGetConstInt(inst->GetRhs(), rhs_c);
+
+            const ir::Value* var_side = nullptr;
+            int64_t const_side = 0;
+            if (lhs_is_c && !rhs_is_c) {
+                var_side = inst->GetRhs();
+                const_side = lhs_c;
+            } else if (!lhs_is_c && rhs_is_c) {
+                var_side = inst->GetLhs();
+                const_side = rhs_c;
+            }
+
+            if (var_side != nullptr) {
+                // 1) Tiny identities (usually folded earlier, still keep backend robust).
+                if (const_side == 0) {
+                    writer_.EmitLi("$t2", 0);
+                    writer_.EmitSwSp("$t2", frame_.GetOffset(inst));
+                    return;
+                }
+                if (const_side == 1) {
+                    LoadValueToReg(var_side, "$t2");
+                    writer_.EmitSwSp("$t2", frame_.GetOffset(inst));
+                    return;
+                }
+                if (const_side == -1) {
+                    LoadValueToReg(var_side, "$t0");
+                    writer_.EmitInsn("subu  $t2, $zero, $t0");
+                    writer_.EmitSwSp("$t2", frame_.GetOffset(inst));
+                    return;
+                }
+
+                bool neg = (const_side < 0);
+                uint64_t abs_c = static_cast<uint64_t>(neg ? -(const_side + 1) + 1 : const_side);
+                int sh = 0;
+                // 2) x * (2^n) => sll
+                if (IsPositivePowerOfTwo(abs_c, sh) && sh <= 31) {
+                    LoadValueToReg(var_side, "$t0");
+                    writer_.EmitInsn("sll   $t2, $t0, " + std::to_string(sh));
+                    if (neg) {
+                        writer_.EmitInsn("subu  $t2, $zero, $t2");
+                    }
+                    writer_.EmitSwSp("$t2", frame_.GetOffset(inst));
+                    return;
+                }
+
+                // 3) x * (2^n + 1) => (x << n) + x
+                if (abs_c > 1 && IsPositivePowerOfTwo(abs_c - 1, sh) && sh <= 31) {
+                    LoadValueToReg(var_side, "$t0");
+                    writer_.EmitInsn("sll   $t2, $t0, " + std::to_string(sh));
+                    writer_.EmitInsn("addu  $t2, $t2, $t0");
+                    if (neg) {
+                        writer_.EmitInsn("subu  $t2, $zero, $t2");
+                    }
+                    writer_.EmitSwSp("$t2", frame_.GetOffset(inst));
+                    return;
+                }
+
+                // 4) x * (2^n - 1) => (x << n) - x
+                if (IsPositivePowerOfTwo(abs_c + 1, sh) && sh <= 31) {
+                    LoadValueToReg(var_side, "$t0");
+                    writer_.EmitInsn("sll   $t2, $t0, " + std::to_string(sh));
+                    writer_.EmitInsn("subu  $t2, $t2, $t0");
+                    if (neg) {
+                        writer_.EmitInsn("subu  $t2, $zero, $t2");
+                    }
+                    writer_.EmitSwSp("$t2", frame_.GetOffset(inst));
+                    return;
+                }
+            }
+        }
+
+        // -----------------------------
+        // DIV optimization (constant)
+        // -----------------------------
+        if (inst->GetOp() == ir::BinaryOp::DIV) {
+            int64_t rhs_c = 0;
+            if (TryGetConstInt(inst->GetRhs(), rhs_c)) {
+                // Preserve baseline behavior for division-by-zero.
+                if (rhs_c != 0) {
+                    // Trivial identities (usually handled by IR pass).
+                    if (rhs_c == 1) {
+                        LoadValueToReg(inst->GetLhs(), "$t2");
+                        writer_.EmitSwSp("$t2", frame_.GetOffset(inst));
+                        return;
+                    }
+                    if (rhs_c == -1) {
+                        LoadValueToReg(inst->GetLhs(), "$t0");
+                        writer_.EmitInsn("subu  $t2, $zero, $t0");
+                        writer_.EmitSwSp("$t2", frame_.GetOffset(inst));
+                        return;
+                    }
+
+                    bool neg = (rhs_c < 0);
+                    uint64_t abs_d = static_cast<uint64_t>(neg ? -(rhs_c + 1) + 1 : rhs_c);
+                    int sh = 0;
+                    // Only optimize signed divide by +/-2^n.
+                    if (IsPositivePowerOfTwo(abs_d, sh) && sh >= 1 && sh <= 31) {
+                        LoadValueToReg(inst->GetLhs(), "$t0");
+                        // Signed trunc-toward-zero division by 2^n:
+                        // q = (x + ((x >> 31) >>> (32 - n))) >> n
+                        writer_.EmitInsn("sra   $t2, $t0, 31");
+                        writer_.EmitInsn("srl   $t2, $t2, " + std::to_string(32 - sh));
+                        writer_.EmitInsn("addu  $t2, $t0, $t2");
+                        writer_.EmitInsn("sra   $t2, $t2, " + std::to_string(sh));
+                        if (neg) {
+                            writer_.EmitInsn("subu  $t2, $zero, $t2");
+                        }
+                        writer_.EmitSwSp("$t2", frame_.GetOffset(inst));
+                        return;
+                    }
+                }
+            }
+        }
+
+        // REM intentionally unchanged in conservative O3.
+        emit_generic();
         writer_.EmitSwSp("$t2", frame_.GetOffset(inst));
+        return;
     }
 
     void InstructionEmitter::EmitLoadInst(const ir::LoadInst* inst) {

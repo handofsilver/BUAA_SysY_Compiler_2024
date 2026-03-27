@@ -9,7 +9,7 @@ namespace mips {
     func_(func),
     options_(options),
     frame_(func),
-    inst_emitter_(writer, frame_, func) {}
+    inst_emitter_(writer, frame_, func, options_) {}
 
     void FunctionEmitter::Emit() {
         frame_.Build();
