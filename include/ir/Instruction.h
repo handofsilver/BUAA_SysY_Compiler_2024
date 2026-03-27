@@ -182,19 +182,28 @@ namespace ir {
      *
      * Printed as: %r = phi i32 [ %v0, %pred0 ], [ %v1, %pred1 ]
      *
-     * Note: incoming (value, block) pairs are stored in a dedicated vector, NOT in
-     * User::operands_, because AddIncoming grows the list incrementally and a
-     * vector reallocation would invalidate Use* pointers already registered in
-     * value use-lists. The incoming values are therefore not tracked in the
-     * def-use chain (acceptable for our Mem2Reg use case).
+     * Two-phase construction (Finalize pattern):
+     *   1. Build phase: AddIncoming() appends to incoming_ (no operands_ touched).
+     *   2. FinalizeOperands(): called once after all incomings are set; copies
+     *      values into User::operands_ via ResizeOperands + SetOperand so they
+     *      participate in the def-use chain and are covered by RAUW.
+     *
+     * After FinalizeOperands, GetIncomingValue(i) reads from operands_ (the
+     * authoritative source). Before finalization it reads from incoming_.
      */
     class PhiInst : public Instruction {
     public:
         PhiInst();
         PhiInst(const std::string& name, Type* type, BasicBlock* parent);
 
-        /** @brief Append one (value, predecessor) incoming pair. */
+        /** @brief Append one (value, predecessor) incoming pair (build phase). */
         void AddIncoming(Value* val, BasicBlock* pred);
+
+        /**
+         * @brief Register all incoming values into User::operands_ (one-shot).
+         * Must be called exactly once, after all AddIncoming calls are done.
+         */
+        void FinalizeOperands();
 
         Value* GetIncomingValue(int i) const;
         BasicBlock* GetIncomingBlock(int i) const;
@@ -204,7 +213,7 @@ namespace ir {
 
     private:
         struct IncomingPair {
-            Value* val;
+            Value* val; ///< Only authoritative before FinalizeOperands; after that operands_[i] is.
             BasicBlock* pred;
         };
         std::vector<IncomingPair> incoming_;

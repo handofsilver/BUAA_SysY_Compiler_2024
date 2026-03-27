@@ -598,8 +598,19 @@ namespace ir {
         incoming_.push_back({val, pred});
     }
 
+    void PhiInst::FinalizeOperands() {
+        size_t n = incoming_.size();
+        ResizeOperands(n);
+        for (size_t i = 0; i < n; ++i) {
+            SetOperand(static_cast<int>(i), incoming_[i].val);
+        }
+    }
+
     Value* PhiInst::GetIncomingValue(int i) const {
         assert(i >= 0 && i < static_cast<int>(incoming_.size()));
+        if (GetNumOperands() > 0) {
+            return GetOperand(i);
+        }
         return incoming_[static_cast<size_t>(i)].val;
     }
 
@@ -622,9 +633,7 @@ namespace ir {
         for (int i = 0; i < static_cast<int>(incoming_.size()); ++i) {
             os << (i == 0 ? " " : ", ");
             os << "[ ";
-            // Print the incoming value (phi result type already given, so for ConstantInt omit
-            // type)
-            Value* val = incoming_[static_cast<size_t>(i)].val;
+            Value* val = GetIncomingValue(i);
             if (val) {
                 ConstantInt* cint = dynamic_cast<ConstantInt*>(val);
                 if (cint && cint->GetType() == type_) {
@@ -636,7 +645,6 @@ namespace ir {
                 os << "undef";
             }
             os << ", ";
-            // Print the predecessor label (just %label, no "label" keyword)
             BasicBlock* pred = incoming_[static_cast<size_t>(i)].pred;
             if (pred) {
                 std::string label;

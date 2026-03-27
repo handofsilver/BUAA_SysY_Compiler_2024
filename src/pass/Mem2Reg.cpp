@@ -373,6 +373,13 @@ namespace pass {
         ctx.module = module;
         RenameBlock(func.GetBlocks().front().get(), ctx);
 
+        // ── Step 6b: Finalize phi operands into User::operands_ (def-use chain).
+        for (auto& [alloca, bb_phi] : phi_map) {
+            for (auto& [bb, phi] : bb_phi) {
+                phi->FinalizeOperands();
+            }
+        }
+
         // ── Step 7: Erase dead loads and stores collected during rename.
         for (ir::Instruction* inst : to_erase) {
             EraseFromParent(inst);
