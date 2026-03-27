@@ -6,6 +6,8 @@
 #include "Driver.h"
 #include "ir/Module.h"
 #include "mips/MipsEmitter.h"
+#include "pass/ConstFoldLVN.h"
+#include "pass/DCE.h"
 #include "pass/Mem2Reg.h"
 #include <cerrno>
 #include <cstring>
@@ -46,6 +48,8 @@ int main() {
         const bool kEmitSymbolOutput = true;    /* semantic analysis: symbol.txt */
         const bool kEmitLLVMIROutput = true;    /* intermediate code(LLVM IR): llvm_ir.txt */
         const bool kEnableMem2Reg = true;       /* IR optimization(Mem2Reg Pass): mem2reg   */
+        const bool kEnableConstFoldLVN = true;  /* IR optimization(ConstFold+LVN Pass)      */
+        const bool kEnableDCE = true;           /* IR optimization(DCE Pass)                */
         const bool kEmitMIPSOutput = true;      /* target code(MIPS): mips.txt */
         const bool kRenumberSSAForPrint = true; /* false = use original IR names (debug) */
 
@@ -77,6 +81,29 @@ int main() {
                         // Skip external declarations (no basic blocks).
                         if (!func->GetBlocks().empty()) {
                             mem2reg.Run(*func, result.module.get());
+                        }
+                    }
+                }
+                if (kEnableConstFoldLVN) {
+                    // Iterate to a fixpoint because substitutions in one function/block
+                    // can expose new fold/LVN opportunities in the same pass pipeline.
+                    bool changed = true;
+                    while (changed) {
+                        changed = false;
+                        pass::ConstFoldLVNPass const_fold_lvn(*result.module);
+                        for (auto& func : result.module->GetFunctions()) {
+                            // Skip external declarations (no basic blocks).
+                            if (!func->GetBlocks().empty()) {
+                                changed |= const_fold_lvn.Run(*func);
+                            }
+                        }
+                    }
+                }
+                if (kEnableDCE) {
+                    pass::DCEPass dce;
+                    for (auto& func : result.module->GetFunctions()) {
+                        if (!func->GetBlocks().empty()) {
+                            dce.Run(*func);
                         }
                     }
                 }
