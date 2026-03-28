@@ -73,9 +73,21 @@ Modeled closely after LLVM's IR:
 - **FunctionEmitter**: per-function prologue/epilogue, delegates instruction selection.
 - **InstructionEmitter**: IR instruction → MIPS instruction selection.
 - **StackFrame**: tracks stack layout; every SSA value gets a spill slot (full-stack-allocation strategy; register allocation is planned but not yet implemented).
-- **AsmWriter**: formats MIPS assembly text.
+- **MipsInst / MipsOpcode** (`include/mips/MipsInst.h`): structured representation of MIPS instructions. All `EmitXxx` methods construct a `MipsInst`; peephole operates on structured fields; serialization to text happens once in `AsmWriter::Serialize()`.
+- **AsmWriter**: formats MIPS assembly text. Internal buffer is `vector<MipsInst>`. Exposes `GetBuffer()` for register allocation passes to read/rewrite instructions.
 - **MipsOptions** (`include/mips/MipsOptions.h`): struct of optimization flags passed through from `main.cpp`. Add new backend flags here.
 - **ValueLocation** (`include/mips/ValueLocation.h`): abstraction over register vs. stack slot; prepared for register allocator.
+
+## Documentation Style
+
+Design documents live in `docs/design_documents/`. When writing or updating them, follow these requirements:
+
+- **Code + prose organic combination**: never dump large code blocks without context, and never write dry text-only descriptions. Interleave code snippets with explanatory text so each illuminates the other. Code blocks should replace verbose natural-language descriptions where the code itself is more direct.
+- **Code navigation**: each major section should include a "代码导读" (code reading guide) subsection showing the file → function reading order as a tree, so readers know exactly where to start and what each piece does.
+- **Complete call chains**: show the full path from entry point (e.g., `main.cpp`) down to the implementation function, not just isolated snippets. Readers should be able to follow the data/control flow end-to-end.
+- **Mermaid diagrams**: use mermaid flowcharts for complex algorithms, decision trees, and multi-step processes to make them visually intuitive.
+- **Sufficient detail**: the document should be detailed enough that someone who has **not read the source code** can understand the complete design. Err on the side of more detail, not less.
+- **"Why" alongside "what"**: when showing a design decision or implementation detail, explain the reasoning behind it (especially non-obvious invariants, safety concerns, or tradeoffs).
 
 ## Key Conventions
 

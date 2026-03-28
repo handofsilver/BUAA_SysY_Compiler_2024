@@ -379,16 +379,16 @@ for (ir::Instruction* inst : to_erase) {
 MIPS 后端优化分散在以下文件中：
 
 ```
+include/mips/MipsInst.h             — MipsInst 结构体 + MipsOpcode 枚举（指令的结构化表示）
 include/mips/MipsOptions.h          — 优化开关定义（所有优化的统一入口）
 src/mips/FunctionEmitter.cpp        — O4 Peephole 的缓冲区生命周期管理
 src/mips/InstructionEmitter.cpp     — O3 乘除法强度削减 + O5 冗余跳转消除
   └─ EmitBinaryInst()               — O3 的具体实现（约 150 行）
   └─ EmitBranchInst()               — O5 的具体实现（约 30 行）
-src/mips/AsmWriter.cpp              — O4 Peephole 的缓冲区与模式匹配
+src/mips/AsmWriter.cpp              — O4 Peephole 的结构化匹配 + 序列化输出
+  └─ Route() / Serialize()          — 指令路由与文本序列化
   └─ BeginBuffer() / FlushBuffer()  — O4 缓冲区的开闭
-  └─ RunPeephole()                  — O4 的两条规则实现
-  └─ IsInsnLine() / ParseSwSp()     — O4 的模式解析辅助
-  └─ ParseLwSp() / ParseMove()
+  └─ RunPeephole()                  — O4 的两条规则实现（结构化字段匹配）
 ```
 
 ### 5.2 开关的流动路径
@@ -436,13 +436,13 @@ void InstructionEmitter::EmitBinaryInst(const ir::BinaryInst* inst) {
         LoadValueToReg(inst->GetLhs(), "$t0");
         LoadValueToReg(inst->GetRhs(), "$t1");
         switch (inst->GetOp()) {
-            case ADD: writer_.EmitInsn("addu  $t2, $t0, $t1"); break;
-            case SUB: writer_.EmitInsn("subu  $t2, $t0, $t1"); break;
-            case MUL: writer_.EmitInsn("mul   $t2, $t0, $t1"); break;
-            case DIV: writer_.EmitInsn("div   $t0, $t1");
-                      writer_.EmitInsn("mflo  $t2");            break;
-            case REM: writer_.EmitInsn("div   $t0, $t1");
-                      writer_.EmitInsn("mfhi  $t2");            break;
+            case ADD: writer_.EmitAddu("$t2", "$t0", "$t1"); break;
+            case SUB: writer_.EmitSubu("$t2", "$t0", "$t1"); break;
+            case MUL: writer_.EmitMul("$t2", "$t0", "$t1");  break;
+            case DIV: writer_.EmitDiv("$t0", "$t1");
+                      writer_.EmitMflo("$t2");                break;
+            case REM: writer_.EmitDiv("$t0", "$t1");
+                      writer_.EmitMfhi("$t2");                break;
         }
     };
 
@@ -510,11 +510,11 @@ x / 2^n = (x + ((x >> 31) >>> (32 - n))) >> n（算术）
 
 ```cpp
 // x / 2^n（有符号，截断向零）的 MIPS 实现（sh = n）
-writer_.EmitInsn("sra   $t2, $t0, 31");                        // 符号掩码
-writer_.EmitInsn("srl   $t2, $t2, " + std::to_string(32 - sh)); // 修正量
-writer_.EmitInsn("addu  $t2, $t0, $t2");                       // x + 修正量
-writer_.EmitInsn("sra   $t2, $t2, " + std::to_string(sh));     // 右移 n 位得商
-if (neg) writer_.EmitInsn("subu  $t2, $zero, $t2");            // 负除数：取反
+writer_.EmitSra("$t2", "$t0", 31);           // 符号掩码
+writer_.EmitSrl("$t2", "$t2", 32 - sh);      // 修正量
+writer_.EmitAddu("$t2", "$t0", "$t2");        // x + 修正量
+writer_.EmitSra("$t2", "$t2", sh);            // 右移 n 位得商
+if (neg) writer_.EmitSubu("$t2", "$zero", "$t2");  // 负除数：取反
 ```
 
 > **保守策略**：对非 2 的幂的常数除数，"魔数乘法"方案（用 32×32→64 位乘法近似倒数）在 MARS 上验证较为繁琐，当前不实现，落入 `emit_generic()` 通用路径。
@@ -536,22 +536,22 @@ lw    $t0, 8($sp)   ; 紧接着下一条指令从偏移 8 读出
 
 ### 7.2 缓冲区的生命周期（在 `FunctionEmitter` 中）
 
-Peephole 在**汇编文本缓冲区**上工作，而非 IR 对象。`AsmWriter` 提供 `BeginBuffer()`/`FlushBuffer()` 接口，`FunctionEmitter::Emit()` 在每个函数的发射前后调用它们：
+Peephole 在 `AsmWriter` 的**结构化指令缓冲区**（`std::vector<MipsInst>`）上工作，而非文本或 IR 对象。`AsmWriter` 提供 `BeginBuffer()`/`FlushBuffer()` 接口，`FunctionEmitter::Emit()` 在每个函数的发射前后调用它们：
 
 ```cpp
 // src/mips/FunctionEmitter.cpp
 void FunctionEmitter::Emit() {
     frame_.Build();
-    if (options_.enable_peephole) writer_.BeginBuffer();  // 开始缓冲：所有 EmitInsn 写入 buf_
+    if (options_.enable_peephole) writer_.BeginBuffer();  // 开始缓冲：所有 MipsInst 进入 buf_
     EmitPrologue();   // 函数序言（addiu $sp、sw $ra、spill 参数寄存器）
     EmitBody();       // 函数体（逐块逐指令翻译）
-    if (options_.enable_peephole) writer_.FlushBuffer();  // 触发 RunPeephole()，再输出到 os_
+    if (options_.enable_peephole) writer_.FlushBuffer();  // 触发 RunPeephole() → Serialize → os_
 }
 ```
 
-`BeginBuffer()` 调用后，所有 `writer_.EmitInsn(...)` / `writer_.EmitSwSp(...)` 等调用都把文本行追加到 `buf_`（`std::vector<std::string>`）而非直接写入文件。`FlushBuffer()` 先运行 `RunPeephole()` 修改 `buf_`，再一次性把 `buf_` 写入 `os_`。
+`BeginBuffer()` 调用后，所有 `writer_.EmitAddu(...)` / `writer_.EmitSwSp(...)` 等调用内部通过 `Route()` 将构造的 `MipsInst` 追加到 `buf_`（而非序列化后直接写文件）。`FlushBuffer()` 先运行 `RunPeephole()` 在 `buf_` 上做结构化模式匹配，再逐条 `Serialize()` 输出文本。
 
-这样做的好处是：序言和函数体的完整指令序列在一个缓冲区里，Peephole 可以跨越"序言/体"边界（虽然实际上很少触发），并能感知 label 行（label 充当基本块边界屏障）。
+> 关于 MipsInst 结构化缓冲区的详细设计，见本文档第 9 节。
 
 ### 7.3 两条规则与收敛循环（在 `AsmWriter::RunPeephole()` 中）
 
@@ -559,48 +559,47 @@ void FunctionEmitter::Emit() {
 
 **规则 P2：sw/lw 对消除**
 
-匹配相邻两行，中间无 label 或空行（屏障），且两行 `$sp` 偏移相同：
+匹配相邻两条指令，中间无 label 或空行（屏障），且两条 `$sp` 偏移相同：
 
 ```
 [i  ]:  sw    $R,  X($sp)    →    不变（值需要留在栈上，后续可能还有 lw）
 [i+1]:  lw    $R', X($sp)    →    move  $R', $R   （$R 还持有刚写入的值）
 ```
 
-实现用 `ParseSwSp()` / `ParseLwSp()` 解析行文本（字符串匹配），偏移相同则替换：
+由于缓冲区现在是结构化的 `MipsInst`，匹配不再需要字符串解析——直接检查 `op`、`src1`（base 寄存器）、`imm`（偏移量）字段：
 
 ```cpp
 for (size_t i = 0; i + 1 < buf_.size(); ++i) {
-    if (!IsInsnLine(buf_[i]) || !IsInsnLine(buf_[i + 1])) continue;  // label 屏障
-    std::string sw_reg; int sw_off;
-    if (!ParseSwSp(buf_[i], sw_reg, sw_off)) continue;
-    std::string lw_reg; int lw_off;
-    if (!ParseLwSp(buf_[i + 1], lw_reg, lw_off)) continue;
-    if (sw_off != lw_off) continue;
-    buf_[i + 1] = "    move  " + lw_reg + ", " + sw_reg;  // 替换！
+    if (!buf_[i].IsInsn() || !buf_[i + 1].IsInsn()) continue;      // label/空行屏障
+    if (buf_[i].op != MipsOpcode::SW || buf_[i].src1 != "$sp") continue;
+    if (buf_[i + 1].op != MipsOpcode::LW || buf_[i + 1].src1 != "$sp") continue;
+    if (buf_[i].imm != buf_[i + 1].imm) continue;                  // 偏移不同，跳过
+    buf_[i + 1] = {MipsOpcode::MOVE, buf_[i + 1].dst, buf_[i].dst}; // 替换为 move！
     changed = true;
 }
 ```
 
+对比旧的字符串实现（需要 `ParseSwSp()` / `ParseLwSp()` 逐字符匹配），结构化版本更简洁、更不易出错。
+
 **规则 P3：自移动消除**
 
-P2 可能产生 `move $t2, $t2`（当 `sw` 和 `lw` 使用了同一个寄存器）。P3 将其直接删行：
+P2 可能产生 `move $t2, $t2`（当 `sw` 和 `lw` 使用了同一个寄存器）。P3 将其直接删除：
 
 ```cpp
 for (size_t i = 0; i < buf_.size(); /* 手动推进 */) {
-    std::string dst, src;
-    if (IsInsnLine(buf_[i]) && ParseMove(buf_[i], dst, src) && dst == src) {
-        buf_.erase(buf_.begin() + i);  // 删除这行
+    if (buf_[i].op == MipsOpcode::MOVE && buf_[i].dst == buf_[i].src1) {
+        buf_.erase(buf_.begin() + static_cast<ptrdiff_t>(i));  // 删除
         changed = true;
     } else { ++i; }
 }
 ```
 
-**`IsInsnLine()` 的 label 屏障机制**：指令行以 4 个空格缩进（`kIndent = "    "`），而 label 行（`foo:`）和空行不以空格开头。只有两行都是 `IsInsnLine` 为真时才做 P2 匹配，确保规则不会跨越基本块边界：
+**`IsInsn()` 的 label 屏障机制**：`MipsInst::IsInsn()` 通过检查 `op` 是否为 `LABEL`/`DIRECTIVE`/`BLANK`/`RAW` 来区分"真正的指令"与"标记行"。只有两条相邻元素都是 `IsInsn() == true` 时才做 P2 匹配，确保规则不会跨越基本块边界：
 
 ```
-    sw    $t0, 4($sp)    ← IsInsnLine = true
-if.merge.3:              ← IsInsnLine = false → P2 在此停止，不匹配跨块对
-    lw    $t0, 4($sp)    ← 下一个块开头的 lw
+[SW, $t0, $sp, 4]    ← IsInsn() = true
+[LABEL, "if.merge.3"]← IsInsn() = false → P2 在此停止，不匹配跨块对
+[LW, $t0, $sp, 4]    ← 下一个块开头的 lw
 ```
 
 ---
@@ -663,7 +662,7 @@ void InstructionEmitter::EmitBranchInst(const ir::BranchInst* inst,
     if (!inst->IsConditional()) {
         // 无条件跳转：目标就是下一块则完全省略
         if (options_.enable_block_merge && inst->GetDest() == next_block) return;
-        writer_.EmitInsn("j     " + BlockLabel(func_.GetName(), inst->GetDest()->GetName()));
+        writer_.EmitJ(BlockLabel(func_.GetName(), inst->GetDest()->GetName()));
         return;
     }
     // 条件跳转
@@ -673,14 +672,14 @@ void InstructionEmitter::EmitBranchInst(const ir::BranchInst* inst,
 
     if (options_.enable_block_merge && false_bb == next_block) {
         // false 分支是下一块（fall-through）：只发射"条件成立时的跳转"
-        writer_.EmitInsn("bnez  $t0, " + BlockLabel(func_.GetName(), true_bb->GetName()));
+        writer_.EmitBnez("$t0", BlockLabel(func_.GetName(), true_bb->GetName()));
     } else if (options_.enable_block_merge && true_bb == next_block) {
         // true 分支是下一块：反转条件，发射"条件不成立时的跳转"
-        writer_.EmitInsn("beqz  $t0, " + BlockLabel(func_.GetName(), false_bb->GetName()));
+        writer_.EmitBeqz("$t0", BlockLabel(func_.GetName(), false_bb->GetName()));
     } else {
         // 两个目标都不是下一块：发射完整的两条跳转指令
-        writer_.EmitInsn("bnez  $t0, " + BlockLabel(func_.GetName(), true_bb->GetName()));
-        writer_.EmitInsn("j     " + BlockLabel(func_.GetName(), false_bb->GetName()));
+        writer_.EmitBnez("$t0", BlockLabel(func_.GetName(), true_bb->GetName()));
+        writer_.EmitJ(BlockLabel(func_.GetName(), false_bb->GetName()));
     }
 }
 ```
@@ -703,9 +702,215 @@ if.merge.4:                                   if.merge.4:
 
 ---
 
-## 9. Pass 间协同
+## 9. MipsInst 结构化：寄存器分配的前置基础设施
 
-### 9.1 顺序依赖与原因
+### 9.1 为什么要结构化？
+
+在实现图染色寄存器分配之前，需要先解决一个基础性问题：**寄存器分配器需要对每条 MIPS 指令做精确的 def/use 分析**（哪些寄存器被定义、哪些被使用），但此前 `AsmWriter` 的缓冲区是 `std::vector<std::string>`——每条指令只是一个格式化好的文本字符串（如 `"    addu  $t2, $t0, $t1"`），从中提取寄存器信息需要反复做字符串解析，既脆弱又低效。
+
+MipsInst 结构化将缓冲区从 `vector<string>` 改为 `vector<MipsInst>`，让每条指令的操作码、寄存器、立即数等字段在**构造时就被分门别类地存储**，而非事后从文本中逆向解析。这为后续寄存器分配的活跃变量分析、干涉图构建等奠定了基础。
+
+### 9.2 代码导读
+
+```
+include/mips/MipsInst.h       — 核心数据结构，阅读本节的起点
+  ├─ enum MipsOpcode           — 覆盖后端发射的所有 MIPS 指令的操作码枚举
+  └─ struct MipsInst           — 统一的结构化表示（op + dst/src1/src2/imm/label/raw）
+
+include/mips/AsmWriter.h      — 接口变更（新增 GetBuffer()、所有 EmitXxx 改为构造 MipsInst）
+src/mips/AsmWriter.cpp         — 实现变更
+  ├─ Route()                   — 替代旧 RawLine()，将 MipsInst 路由到 buf_ 或直接序列化
+  ├─ Serialize()               — MipsInst → 文本，所有格式化集中在此一处
+  ├─ EmitXxx() 系列            — 每个方法构造一条类型化 MipsInst 并调用 Route()
+  └─ RunPeephole()             — 匹配逻辑从字符串解析改为结构化字段比较
+
+src/mips/InstructionEmitter.cpp — 调用方变更：EmitInsn("addu ...") → EmitAddu("$t2", "$t0", "$t1")
+```
+
+### 9.3 `MipsInst`：统一的指令表示
+
+整个结构化方案的核心是 `MipsInst` 结构体和 `MipsOpcode` 枚举（定义在 `include/mips/MipsInst.h`）。
+
+`MipsOpcode` 枚举覆盖后端可能发射的全部 MIPS 指令，按类别组织：
+
+```cpp
+enum class MipsOpcode {
+    // R-type: dst = src1 op src2
+    ADDU, SUBU, MUL, AND, OR, SLT, SGT, SLE, SGE, SEQ, SNE,
+    // Shift: dst = src1 op imm
+    SLL, SRL, SRA,
+    // Division: HI:LO = src1 / src2
+    DIV, MFLO, MFHI,
+    // I-type: dst = src1 op imm
+    ADDIU, ANDI,
+    // Memory: dst/src, offset(base)
+    LW, SW, LBU, SB,
+    // Pseudo-load
+    LI, LA,
+    // Control flow
+    J, JAL, JR, BNEZ, BEQZ,
+    // Register copy
+    MOVE,
+    // System
+    SYSCALL,
+    // Non-instruction markers
+    LABEL, DIRECTIVE, BLANK, RAW,
+};
+```
+
+`MipsInst` 结构体使用**平铺字段**（而非继承层次或 variant），所有指令共享同一组字段，不同操作码使用不同的字段子集：
+
+```cpp
+struct MipsInst {
+    MipsOpcode  op   = MipsOpcode::RAW;
+    std::string dst;    // 目标寄存器（或 SW/SB 中的值寄存器）
+    std::string src1;   // 第一源寄存器 / 基址寄存器
+    std::string src2;   // 第二源寄存器
+    int64_t     imm  = 0;  // 立即数 / 偏移量 / 移位量
+    std::string label;  // 标签名（分支目标 / LA 目标 / LABEL 定义）
+    std::string raw;    // 预格式化文本（DIRECTIVE / RAW 专用）
+
+    bool IsInsn() const {
+        return op != MipsOpcode::LABEL && op != MipsOpcode::DIRECTIVE
+            && op != MipsOpcode::BLANK  && op != MipsOpcode::RAW;
+    }
+};
+```
+
+**字段约定**因操作码类别而异，在头文件的文档注释中列出了完整的对照表：
+
+| 操作码类别 | `dst` | `src1` | `src2` | `imm` | `label` |
+|-----------|-------|--------|--------|-------|---------|
+| R-type (ADDU 等) | rd | rs | rt | — | — |
+| Shift (SLL 等) | rd | rt | — | shamt | — |
+| DIV | — | rs | rt | — | — |
+| MFLO / MFHI | rd | — | — | — | — |
+| I-arith (ADDIU 等) | rt | rs | — | imm | — |
+| LW / LBU | rt（目标） | base | — | offset | — |
+| SW / SB | rt（值） | base | — | offset | — |
+| LI | rd | — | — | imm | — |
+| LA | rd | — | — | — | target |
+| MOVE | rd | rs | — | — | — |
+| J / JAL | — | — | — | — | target |
+| JR | — | rs | — | — | — |
+| BNEZ / BEQZ | — | rs | — | — | target |
+| LABEL | — | — | — | — | name |
+
+**为什么选择平铺而非继承/variant？** 因为 MIPS 指令格式非常统一——几乎都是 ≤3 个寄存器 + 1 个立即数 + 1 个标签的组合。平铺结构的好处是：结构体可以用聚合初始化直接构造（无需工厂函数），peephole 的字段访问无需类型转换，序列化也只需一个 `switch`。未使用的字段保持默认空值，开销可以忽略。
+
+### 9.4 `Route()` 与 `Serialize()`：路由与序列化的分离
+
+旧设计中 `RawLine(std::string)` 同时承担了"路由到缓冲区或输出流"和"文本本身就是最终格式"两个职责。结构化后，两个职责被明确分离：
+
+**`Route(MipsInst)`**：决定一条指令去哪——缓冲区还是输出流：
+
+```cpp
+void AsmWriter::Route(MipsInst inst) {
+    if (buffering_) {
+        buf_.push_back(std::move(inst));  // 缓冲模式：存入 vector<MipsInst>
+    } else {
+        os_ << Serialize(inst) << "\n";   // 直连模式：立即序列化并输出
+    }
+}
+```
+
+**`Serialize(const MipsInst&)`**：将结构化指令转换为 MARS 兼容的汇编文本。所有格式化逻辑集中在此一处（一个大 `switch`），确保任何格式调整只需修改一个函数：
+
+```cpp
+std::string AsmWriter::Serialize(const MipsInst& inst) {
+    auto pad = [](const char* name) -> std::string {   // 操作码补齐到 6 字符
+        std::string s(name); s.resize(6, ' '); return s;
+    };
+    const std::string kInd(kIndent);
+    switch (inst.op) {
+        case MipsOpcode::ADDU:
+            return kInd + pad("addu") + inst.dst + ", " + inst.src1 + ", " + inst.src2;
+        case MipsOpcode::SW:
+            return kInd + pad("sw") + inst.dst + ", " + std::to_string(inst.imm)
+                   + "(" + inst.src1 + ")";
+        case MipsOpcode::LABEL:
+            return inst.label + ":";
+        // ... 其余操作码格式类似
+    }
+}
+```
+
+### 9.5 类型化的 `EmitXxx()` 方法
+
+旧接口通过一个泛型的 `EmitInsn(const std::string&)` 发射所有指令（调用方手动拼接格式化字符串）。结构化后，每条指令都有对应的类型化方法，调用方无需关心格式：
+
+```cpp
+// 旧接口（字符串拼接，容易出格式错误）：
+writer_.EmitInsn("addu  $t2, $t0, $t1");
+writer_.EmitInsn("sw    $t2, " + std::to_string(offset) + "($sp)");
+
+// 新接口（类型化，字段在构造时分类存储）：
+writer_.EmitAddu("$t2", "$t0", "$t1");
+writer_.EmitSwSp("$t2", offset);  // 内部调用 EmitSw("$t2", offset, "$sp")
+```
+
+每个 `EmitXxx()` 方法的实现都极为简洁——构造一条 `MipsInst` 并交给 `Route()`：
+
+```cpp
+void AsmWriter::EmitAddu(const std::string& dst, const std::string& src1,
+                         const std::string& src2) {
+    Route({MipsOpcode::ADDU, dst, src1, src2});
+}
+
+void AsmWriter::EmitSw(const std::string& src, int offset, const std::string& base) {
+    Route({MipsOpcode::SW, src, base, {}, offset});
+}
+
+void AsmWriter::EmitSwSp(const std::string& reg, int offset) {
+    EmitSw(reg, offset, "$sp");  // 便利封装：base 固定为 $sp
+}
+```
+
+`EmitInsn(const std::string&)` 仍然保留（构造 `MipsOpcode::RAW` 类型的 `MipsInst`），用于边缘场景。
+
+### 9.6 Peephole 的结构化改造
+
+Peephole 是结构化带来最直观收益的地方。旧的 `RunPeephole()` 需要三个字符串解析函数（`ParseSwSp`、`ParseLwSp`、`ParseMove`）来从文本行中提取寄存器和偏移量，任何格式微调（例如改变操作码的列宽）都可能导致解析失败。结构化后，匹配变成了直接的字段比较：
+
+```cpp
+// 旧（字符串解析）：
+if (!IsInsnLine(buf_[i]) || !IsInsnLine(buf_[i + 1])) continue;
+std::string sw_reg; int sw_off;
+if (!ParseSwSp(buf_[i], sw_reg, sw_off)) continue;       // 可能因格式微调而失效
+std::string lw_reg; int lw_off;
+if (!ParseLwSp(buf_[i + 1], lw_reg, lw_off)) continue;
+if (sw_off != lw_off) continue;
+buf_[i + 1] = "    move  " + lw_reg + ", " + sw_reg;
+
+// 新（结构化字段）：
+if (!buf_[i].IsInsn() || !buf_[i + 1].IsInsn()) continue;
+if (buf_[i].op != MipsOpcode::SW || buf_[i].src1 != "$sp") continue;
+if (buf_[i + 1].op != MipsOpcode::LW || buf_[i + 1].src1 != "$sp") continue;
+if (buf_[i].imm != buf_[i + 1].imm) continue;
+buf_[i + 1] = {MipsOpcode::MOVE, buf_[i + 1].dst, buf_[i].dst};   // 构造新 MipsInst
+```
+
+三个 `ParseXxx` 函数和 `IsInsnLine` 因此被完全移除，代码减少约 80 行。
+
+### 9.7 `GetBuffer()`：为寄存器分配暴露缓冲区
+
+`AsmWriter` 新增了两个访问器，允许外部 pass（即将实现的寄存器分配器）直接读写 `buf_`：
+
+```cpp
+// include/mips/AsmWriter.h
+const std::vector<MipsInst>& GetBuffer() const { return buf_; }  // 只读：活跃分析、干涉图构建
+std::vector<MipsInst>&       GetBuffer()       { return buf_; }  // 可写：寄存器重写
+```
+
+寄存器分配器的工作流是：`BeginBuffer()` → 正常发射全栈代码 → 在 `FlushBuffer()` 之前，通过 `GetBuffer()` 遍历所有 `MipsInst`，分析 def/use 集合、构建活跃区间和干涉图、执行图染色、**原地重写** `MipsInst` 中的寄存器字段 → `FlushBuffer()` 运行 peephole 并序列化输出。
+
+这个接口使得寄存器分配器不需要关心序列化逻辑，只需操作结构化字段即可。
+
+---
+
+## 10. Pass 间协同
+
+### 10.1 顺序依赖与原因
 
 ```mermaid
 flowchart LR
@@ -724,7 +929,7 @@ flowchart LR
 | O3 在 MIPS 翻译中内联 | 强度削减在指令选择阶段按需替换，不需要单独 pass |
 | O4/O5 在所有指令发射后 | O4 需要看到完整的函数指令流才能做模式匹配；O5 需要知道下一块是什么 |
 
-### 9.2 IR 优化与 MIPS 优化的互补关系
+### 10.2 IR 优化与 MIPS 优化的互补关系
 
 两层优化针对不同层次的低效，叠加后效果显著：
 
@@ -738,7 +943,7 @@ flowchart LR
 
 ---
 
-## 10. 文件结构速查
+## 11. 文件结构速查
 
 ```
 include/pass/
@@ -751,19 +956,20 @@ src/pass/
   DCE.cpp             ← IsRoot / DetachOperands / EraseInstFromBlockList / Run（全部实现）
 
 include/mips/
+  MipsInst.h          ← MipsOpcode 枚举 + MipsInst 结构体（结构化指令表示）
   MipsOptions.h       ← O3/O4/O5/寄存器分配开关（结构体定义）
   InstructionEmitter.h← Emit() / EmitBranchInst() 声明
-  AsmWriter.h         ← BeginBuffer / FlushBuffer / RunPeephole 声明
+  AsmWriter.h         ← Route / Serialize / BeginBuffer / FlushBuffer / GetBuffer 声明
 
 src/mips/
   InstructionEmitter.cpp  ← EmitBinaryInst()（O3）/ EmitBranchInst()（O5）
-  AsmWriter.cpp           ← RunPeephole()（O4）/ ParseSwSp / ParseLwSp / IsInsnLine
+  AsmWriter.cpp           ← Route() / Serialize() / RunPeephole()（结构化匹配）
   FunctionEmitter.cpp     ← Emit() 中的 BeginBuffer/FlushBuffer 驱动（O4 触发点）
 ```
 
 ---
 
-## 11. 验证方法
+## 12. 验证方法
 
 | 优化 | 验证场景 | 预期效果（可直接观察） |
 |------|---------|---------|
