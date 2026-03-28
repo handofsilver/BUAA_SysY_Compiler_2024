@@ -8,7 +8,7 @@
 
 > BUAA School of Computer Science and Engineering - Compiler Principles Course Project - SysY Language Compiler (C++17 Refactored Version)
 
-This repository documents the refactoring of a SysY compiler from Java to C++. Development is organized by stages. All functional stages are complete: lexical analysis, syntax analysis, semantic analysis, intermediate code generation (including Mem2Reg optimization), and **MIPS target code generation**. The final **code optimization** stage is currently in progress. The driver reads `testfile.txt`, runs the full compilation pipeline, and writes `llvm_ir.txt` (LLVM IR) and `mips.txt` (MIPS assembly, runnable in MARS 4.5) when no errors are present, or `error.txt` otherwise.
+This repository documents the refactoring of a SysY compiler from Java to C++. Development is organized by stages. **All stages are complete**: lexical analysis, syntax analysis, semantic analysis, intermediate code generation (including Mem2Reg optimization), MIPS target code generation, and code optimization (IR-level constant folding/DCE + MIPS-level peephole optimization/graph-coloring register allocation). The driver reads `testfile.txt`, runs the full compilation pipeline, and writes `llvm_ir.txt` (LLVM IR) and `mips.txt` (optimized MIPS assembly, runnable in MARS 4.5) when no errors are present, or `error.txt` otherwise.
 
 ------
 
@@ -52,13 +52,13 @@ This README will be dynamically updated to reflect development progress.
 | **Intermediate Code** | `llvm_ir` | ✅ Completed | In-memory IR structure (Value/User), IRBuilder generation, outputs `llvm_ir.txt`. |
 | **IR Optimization** | `mem2reg` | ✅ Completed | **Mem2Reg Pass**: CFG construction, Cooper dominator tree, dominance frontier, φ-node insertion and SSA renaming; outputs fully-SSA-form `llvm_ir.txt`. |
 | **Target Code** | `mips` | ✅ Completed | **MIPS backend**: full-stack allocation, instruction selection, calling convention, phi lowering; modular architecture, outputs `mips.txt`. |
-| **Code Optimization** | `optimize` | 🔧 In Progress | **IR + MIPS optimization**: constant folding, dead code elimination, multiply/divide strength reduction, peephole optimization, etc. |
+| **Code Optimization** | `optimize` | ✅ Completed | **IR optimization**: constant folding + LVN, dead code elimination. **MIPS optimization**: multiply/divide strength reduction, redundant jump elimination, peephole optimization, graph-coloring register allocation (Chaitin-Briggs). |
 
 ------
 
 ## 📁 Project Structure
 
-The main pipeline is **Lexer → Parser → SemanticAnalyzer → IRGenVisitor → Mem2RegPass → MipsEmitter**. Final output: **no errors** → fully-SSA-form `llvm_ir.txt` + MIPS assembly `mips.txt`; **any errors** → merged `error.txt` from all previous stages.
+The main pipeline is **Lexer → Parser → SemanticAnalyzer → IRGenVisitor → Mem2Reg → ConstFoldLVN → DCE → MipsEmitter (with graph-coloring register allocation)**. Final output: **no errors** → fully-SSA-form `llvm_ir.txt` + optimized MIPS assembly `mips.txt`; **any errors** → merged `error.txt` from all previous stages.
 
 ```Plaintext
 .
@@ -99,13 +99,17 @@ The main pipeline is **Lexer → Parser → SemanticAnalyzer → IRGenVisitor �
 │   ├── pass/                 # IR optimization passes
 │   │   ├── CFGBuilder.cpp
 │   │   ├── DomTree.cpp
-│   │   └── Mem2Reg.cpp
+│   │   ├── Mem2Reg.cpp
+│   │   ├── ConstFoldLVN.cpp  # Constant folding + local value numbering
+│   │   └── DCE.cpp           # Dead code elimination
 │   └── mips/                 # MIPS backend code generation
 │       ├── MipsEmitter.cpp   # Top-level driver: .data / .text segments
-│       ├── FunctionEmitter.cpp # Per-function orchestrator: prologue + body
-│       ├── InstructionEmitter.cpp # Instruction selection: IR → MIPS sequences
+│       ├── FunctionEmitter.cpp # Per-function orchestrator: prologue + body + regalloc entry
+│       ├── InstructionEmitter.cpp # Instruction selection: IR → MIPS (with vreg emission)
 │       ├── StackFrame.cpp    # Stack frame layout and value offset computation
 │       ├── AsmWriter.cpp     # MIPS assembly output formatting
+│       ├── LivenessAnalysis.cpp # Liveness analysis + interference graph construction
+│       ├── RegAlloc.cpp      # Graph-coloring register allocation (Chaitin-Briggs) + buffer rewrite
 │       └── MipsCommon.cpp    # Label generation and shared utilities
 ├── include/
 │   ├── Lexer.h
@@ -146,13 +150,18 @@ The main pipeline is **Lexer → Parser → SemanticAnalyzer → IRGenVisitor �
 │   │   ├── Pass.h
 │   │   ├── CFGBuilder.h
 │   │   ├── DomTree.h
-│   │   └── Mem2Reg.h
+│   │   ├── Mem2Reg.h
+│   │   ├── ConstFoldLVN.h
+│   │   └── DCE.h
 │   └── mips/                 # MIPS backend headers
 │       ├── MipsEmitter.h     # Top-level driver
 │       ├── FunctionEmitter.h # Per-function orchestrator
 │       ├── InstructionEmitter.h # Instruction selection
 │       ├── StackFrame.h      # Stack frame layout
 │       ├── AsmWriter.h       # Assembly output helper
+│       ├── MipsInst.h        # Structured MIPS instruction representation
+│       ├── LivenessAnalysis.h # Liveness analysis + interference graph
+│       ├── RegAlloc.h        # Graph-coloring register allocator
 │       ├── MipsCommon.h      # Shared utilities and constants
 │       ├── MipsOptions.h     # Compile options / optimization switches
 │       └── ValueLocation.h   # Value location abstraction (stack/register)
@@ -274,8 +283,8 @@ Building upon the Abstract Syntax Tree (AST) and the symbol table, a single **Vi
 
 Building on the fully-SSA-form IR produced by Mem2Reg, the backend traverses `ir::Module` and translates each IR instruction into an equivalent MIPS assembly sequence, writing the result to `mips.txt` for execution in MARS 4.5.
 
-- **Full-stack allocation**: The initial version prioritizes correctness—every SSA Value is assigned a stack slot, with `$t0`–`$t3` used as scratch registers for operand shuttling. No register allocation is performed, but the architecture reserves a `ValueLocation` abstraction and `MipsOptions` switches for seamless future integration of graph-coloring register allocation.
-- **Modular architecture**: After AI-assisted refactoring, the original two-file implementation (MipsEmitter + FunctionEmitter) was decomposed into 8 single-responsibility modules—StackFrame (frame layout), InstructionEmitter (instruction selection), AsmWriter (output formatting), etc.—with clean, acyclic dependencies.
+- **Graph-coloring register allocation**: Implements the full Chaitin-Briggs algorithm (Build → Simplify → Coalesce → Freeze → Spill → Select). Liveness analysis and interference graph construction map virtual registers to 18 physical registers (`$t0`-`$t9` + `$s0`-`$s7`). George-criterion coalescing eliminates redundant MOVE instructions; callee-saved registers are automatically saved/restored.
+- **Modular architecture**: After AI-assisted refactoring, decomposed into 10 single-responsibility modules—StackFrame (frame layout), InstructionEmitter (instruction selection), AsmWriter (output formatting), LivenessAnalysis (liveness analysis), RegAlloc (register allocation), etc.—with clean, acyclic dependencies.
 - **Calling convention**: Args 0–3 via `$a0`–`$a3`, args 4+ pushed on stack by caller; return value in `$v0`; `$ra` saved/restored by callee.
 - **Phi lowering**: Moves are emitted at predecessor branches using topological sort to resolve parallel-copy write-clobber issues.
 
@@ -309,9 +318,9 @@ cmake --build .
 
 ### Usage
 
-Place `testfile.txt` in the executable’s working directory (or set the IDE run configuration accordingly). The program runs the full pipeline **Lexer → Parser → SemanticAnalyzer → IRGenVisitor → Mem2Reg → MipsEmitter** and produces:
+Place `testfile.txt` in the executable’s working directory (or set the IDE run configuration accordingly). The program runs the full pipeline **Lexer → Parser → SemanticAnalyzer → IRGenVisitor → Mem2Reg → ConstFoldLVN → DCE → MipsEmitter (with register allocation)** and produces:
 
-- **No errors**: `llvm_ir.txt` (fully-SSA-form LLVM IR) and `mips.txt` (MIPS assembly, runnable in MARS 4.5).
+- **No errors**: `llvm_ir.txt` (fully-SSA-form LLVM IR) and `mips.txt` (optimized MIPS assembly, runnable in MARS 4.5).
 - **Any errors**: `error.txt` (line number + error code; lex, parse, and semantic errors merged and sorted by line).
 
 ```Bash
@@ -365,4 +374,5 @@ Place `testfile.txt` in the executable’s working directory (or set the IDE run
 - [LLVM IR design](docs/design_documents/llvm_ir.md)
 - [Mem2Reg optimization design](docs/design_documents/mem2reg.md)
 - [MIPS backend design](docs/design_documents/mips_backend.md)
-- [Optimization phase plan](docs/ai_collab_notes/optimization/optimization_phase_plan_20260310.md)
+- [Code optimization design](docs/design_documents/optimization.md)
+- [Graph-coloring register allocation design](docs/design_documents/register_allocation.md)

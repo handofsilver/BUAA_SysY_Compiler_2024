@@ -8,7 +8,7 @@
 
 > 北航计算机学院编译原理课程实验 - SysY 语言编译器（C++17 重构版）
 
-本仓库记录了该编译器从 Java 版本迁移至 C++ 版本的重构过程。项目按实验阶段管理分支，当前已完成**词法分析**、**语法分析**、**语义分析**、**中间代码生成（含 Mem2Reg 优化）**与 **MIPS 目标代码生成**全部功能阶段，正在进行最后的**代码优化**阶段；主控读取 `testfile.txt`，经完整编译流水线后输出 `llvm_ir.txt`（LLVM IR）和 `mips.txt`（MIPS 汇编，可在 MARS 4.5 上运行），或 `error.txt`（有错误时）。
+本仓库记录了该编译器从 Java 版本迁移至 C++ 版本的重构过程。项目按实验阶段管理分支，当前已完成**全部阶段**：**词法分析**、**语法分析**、**语义分析**、**中间代码生成（含 Mem2Reg 优化）**、**MIPS 目标代码生成**与**代码优化**（IR 级常量折叠/DCE + MIPS 级窥孔优化/图染色寄存器分配）。主控读取 `testfile.txt`，经完整编译流水线后输出 `llvm_ir.txt`（LLVM IR）和 `mips.txt`（MIPS 汇编，可在 MARS 4.5 上运行），或 `error.txt`（有错误时）。
 
 ------
 
@@ -52,13 +52,13 @@
 | **中间代码**    | `llvm_ir`  | ✅ 已完成 | 基于内存的 IR 树形结构（Value/User）、IRBuilder 模式生成，输出 `llvm_ir.txt`。|
 | **IR 优化**     | `mem2reg`  | ✅ 已完成 | **Mem2Reg Pass**：CFG 构建、Cooper 支配树、支配边界、φ 节点插入与 SSA 重命名；输出完全 SSA 形式的 `llvm_ir.txt`。|
 | **目标代码**    | `mips`     | ✅ 已完成 | **MIPS 后端**：全栈分配、指令选择、调用约定、Phi 下降；模块化架构，输出 `mips.txt`。|
-| **代码优化**    | `optimize` | 🔧 进行中 | **IR + MIPS 优化**：常量折叠、死代码消除、乘除强度削减、窥孔优化等。|
+| **代码优化**    | `optimize` | ✅ 已完成 | **IR 优化**：常量折叠+LVN、死代码消除。**MIPS 优化**：乘除强度削减、冗余跳转消除、窥孔优化、图染色寄存器分配（Chaitin-Briggs）。|
 
 ------
 
 ## 📁 项目结构
 
-当前主流程为 **Lexer → Parser → SemanticAnalyzer → IRGenVisitor → Mem2RegPass → MipsEmitter**；无错误时写完全 SSA 形式的 `llvm_ir.txt` 与 MIPS 汇编 `mips.txt`，有错误时合并之前阶段错误写 `error.txt`。
+当前主流程为 **Lexer → Parser → SemanticAnalyzer → IRGenVisitor → Mem2Reg → ConstFoldLVN → DCE → MipsEmitter（含图染色寄存器分配）**；无错误时写完全 SSA 形式的 `llvm_ir.txt` 与优化后的 MIPS 汇编 `mips.txt`，有错误时合并之前阶段错误写 `error.txt`。
 
 ```Plaintext
 .
@@ -99,13 +99,17 @@
 │   ├── pass/                 # IR 优化 Pass
 │   │   ├── CFGBuilder.cpp
 │   │   ├── DomTree.cpp
-│   │   └── Mem2Reg.cpp
+│   │   ├── Mem2Reg.cpp
+│   │   ├── ConstFoldLVN.cpp  # 常量折叠 + 局部值编号
+│   │   └── DCE.cpp           # 死代码消除
 │   └── mips/                 # MIPS 后端代码生成
 │       ├── MipsEmitter.cpp   # 顶层驱动：.data / .text 段
-│       ├── FunctionEmitter.cpp # 每函数编排：prologue + body
-│       ├── InstructionEmitter.cpp # 指令选择：IR → MIPS 序列
+│       ├── FunctionEmitter.cpp # 每函数编排：prologue + body + 寄存器分配接入
+│       ├── InstructionEmitter.cpp # 指令选择：IR → MIPS 序列（含虚拟寄存器发射）
 │       ├── StackFrame.cpp    # 栈帧布局与 Value 偏移计算
 │       ├── AsmWriter.cpp     # MIPS 汇编输出格式化
+│       ├── LivenessAnalysis.cpp # 活跃变量分析 + 干涉图构建
+│       ├── RegAlloc.cpp      # 图染色寄存器分配（Chaitin-Briggs）+ 缓冲区重写
 │       └── MipsCommon.cpp    # 标签生成等共享工具
 ├── include/
 │   ├── Lexer.h
@@ -146,13 +150,18 @@
 │   │   ├── Pass.h
 │   │   ├── CFGBuilder.h
 │   │   ├── DomTree.h
-│   │   └── Mem2Reg.h
+│   │   ├── Mem2Reg.h
+│   │   ├── ConstFoldLVN.h
+│   │   └── DCE.h
 │   └── mips/                 # MIPS 后端头文件
 │       ├── MipsEmitter.h     # 顶层驱动
 │       ├── FunctionEmitter.h # 每函数编排
 │       ├── InstructionEmitter.h # 指令选择
 │       ├── StackFrame.h      # 栈帧布局
 │       ├── AsmWriter.h       # 汇编输出助手
+│       ├── MipsInst.h        # 结构化 MIPS 指令表示
+│       ├── LivenessAnalysis.h # 活跃分析 + 干涉图
+│       ├── RegAlloc.h        # 图染色寄存器分配器
 │       ├── MipsCommon.h      # 共享工具与常量
 │       ├── MipsOptions.h     # 编译选项 / 优化开关
 │       └── ValueLocation.h   # Value 位置抽象（栈/寄存器）
@@ -274,8 +283,8 @@
 
 在 Mem2Reg 产出的完全 SSA 形式 IR 基础上，遍历 `ir::Module`，将每条 IR 指令翻译为等价的 MIPS 汇编序列，写入 `mips.txt`，可在 MARS 4.5 上正确执行。
 
-- **全栈分配策略**：初版以正确性为唯一目标，每个 SSA Value 均分配栈槽，运算时临时借用 `$t0`–`$t3` 搬运。不做寄存器分配，但架构已预留 `ValueLocation` 抽象与 `MipsOptions` 优化开关，后续可无缝接入图着色寄存器分配。
-- **模块化架构**：经 AI 协作重构，从初版两文件（MipsEmitter + FunctionEmitter）拆分为 8 个单一职责模块——StackFrame（栈帧布局）、InstructionEmitter（指令选择）、AsmWriter（输出格式化）等，职责清晰、依赖无环。
+- **图染色寄存器分配**：实现完整的 Chaitin-Briggs 算法（Build → Simplify → Coalesce → Freeze → Spill → Select），通过活跃变量分析与干涉图构建，将虚拟寄���器分配到 18 个物理寄存器（`$t0`-`$t9` + `$s0`-`$s7`）中。George 准则合并消除冗余 MOVE 指令，callee-saved 寄存器自动保存/恢复。
+- **模块���架构**：经 AI 协作重构，拆分为 10 个单一职责模块——StackFrame（栈帧布局）、InstructionEmitter（指令选择）、AsmWriter（输出格式化）、LivenessAnalysis（活跃分析）、RegAlloc（寄存器分配）等，职责清晰、依赖无环。
 - **调用约定**：参数 0–3 通过 `$a0`–`$a3`，参数 4+ 由调用者在栈上传递；返回值 `$v0`；`$ra` 由被调函数保存/恢复。
 - **Phi 下降**：在前驱块跳转前通过拓扑排序发射 move，解决并行复制的写覆盖问题。
 
@@ -311,9 +320,9 @@ cmake --build .
 
 ### 运行方式
 
-将 `testfile.txt` 放在可执行文件所在目录（或配置 IDE 工作目录）。程序执行完整编译流水线 **Lexer → Parser → SemanticAnalyzer → IRGenVisitor → Mem2Reg → MipsEmitter**，根据是否存在错误生成：
+将 `testfile.txt` 放在可执行文件所在目录（或配置 IDE 工作目录）。程序执行完整编译流水线 **Lexer → Parser → SemanticAnalyzer → IRGenVisitor → Mem2Reg → ConstFoldLVN → DCE → MipsEmitter（含寄存器分配）**，根据是否存在错误生成：
 
-- **无错误**：`llvm_ir.txt`（完全 SSA 形式的 LLVM IR）、`mips.txt`（MIPS 汇编，可在 MARS 4.5 中运行）。
+- **无错误**：`llvm_ir.txt`（完全 SSA 形式的 LLVM IR）、`mips.txt`（优化后的 MIPS 汇编，可在 MARS 4.5 中运行）。
 - **有错误**：`error.txt`（行号 + 错误码，词法/语法/语义合并并按行号排序）。
 
 ```Bash
@@ -367,4 +376,5 @@ cmake --build .
 - [LLVM IR 设计文档](docs/design_documents/llvm_ir.md)
 - [Mem2Reg 优化设计文档](docs/design_documents/mem2reg.md)
 - [MIPS 后端设计文档](docs/design_documents/mips_backend.md)
-- [优化阶段规划](docs/ai_collab_notes/optimization/optimization_phase_plan_20260310.md)
+- [代码优化设计文档](docs/design_documents/optimization.md)
+- [图染色寄存器分配设计文档](docs/design_documents/register_allocation.md)
