@@ -13,8 +13,18 @@ namespace mips {
 
     void FunctionEmitter::Emit() {
         frame_.Build();
+        // Open a per-function buffer so that RunPeephole() can optimise the
+        // complete instruction stream (prologue + body) as a single unit.
+        // Labels inside the buffer act as natural barriers (IsInsnLine = false),
+        // so no pattern ever fires across a block boundary.
+        if (options_.enable_peephole) {
+            writer_.BeginBuffer();
+        }
         EmitPrologue();
         EmitBody();
+        if (options_.enable_peephole) {
+            writer_.FlushBuffer();
+        }
     }
 
     // =========================================================================

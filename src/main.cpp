@@ -51,6 +51,7 @@ int main() {
         const bool kEnableConstFoldLVN = true;  /* IR optimization(ConstFold+LVN Pass)      */
         const bool kEnableDCE = true;           /* IR optimization(DCE Pass)                */
         const bool kEnableMulDivOpt = true;     /* MIPS optimization(Mul/Div strength reduction) */
+        const bool kEnablePeephole = true;      /* MIPS optimization(Peephole: sw/lw elim, etc.) */
         const bool kEmitMIPSOutput = true;      /* target code(MIPS): mips.txt */
         const bool kRenumberSSAForPrint = true; /* false = use original IR names (debug) */
 
@@ -115,8 +116,8 @@ int main() {
                 std::ofstream mips_out("mips.txt");
                 mips::MipsOptions mips_opts;
                 mips_opts.enable_mul_div_opt = kEnableMulDivOpt;
+                mips_opts.enable_peephole = kEnablePeephole;
                 // mips_opts.enable_reg_alloc = kEnableRegAlloc;  // TODO: wire up
-                // mips_opts.enable_peephole  = kEnablePeephole;  // TODO: wire up
                 mips::MipsEmitter emitter(mips_out, *result.module, mips_opts);
                 emitter.Emit();
             }
