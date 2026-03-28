@@ -26,18 +26,20 @@ namespace pass {
     // =========================================================================
 
     /**
-     * Safely remove an instruction from its parent block.
-     *   1. Null out every operand so the instruction is detached from all
-     *      use-lists before the object is destroyed.
-     *   2. Erase the owning unique_ptr from the parent block's instruction list.
-     *
-     * Precondition: the instruction's own use-list must be empty (i.e. RAUW has
-     * already been performed on its result, or it never had any uses).
+     * Detach this instruction from all operand Values (use-list cleanup).
+     * Must be called while every operand Instruction is still allocated — see Run() below.
      */
-    static void EraseFromParent(ir::Instruction* inst) {
+    static void DetachOperands(ir::Instruction* inst) {
         for (int i = 0; i < static_cast<int>(inst->GetNumOperands()); ++i) {
             inst->SetOperand(i, nullptr);
         }
+    }
+
+    /**
+     * Remove an instruction from its parent block after operands are already detached.
+     * Precondition: SetOperand(i, nullptr) has been called for all i (or operands empty).
+     */
+    static void EraseInstFromBlockList(ir::Instruction* inst) {
         ir::BasicBlock* bb = inst->GetParent();
         assert(bb && "Instruction has no parent block");
         auto& insts = bb->GetInstructions();
@@ -136,11 +138,20 @@ namespace pass {
             }
         }
 
-        // ── Step 5: Erase dead instructions.
-        // EraseFromParent nulls operands first (detaches from use-lists), then
-        // removes the unique_ptr from the parent block (destroying the object).
+        // ── Step 5: Erase dead instructions (two phases — order-safe).
+        //
+        // If we null operands and destroy instruction D before clearing a dead user E
+        // that still has D as an operand, then E->SetOperand(..., nullptr) calls
+        // D->RemoveUse(&use) on a destroyed D → UB / segfault.
+        //
+        // Phase 5a: For every dead instruction, detach all operands while every
+        //           referenced Instruction is still alive (order-independent).
+        // Phase 5b: Remove dead instructions from their blocks (destroy objects).
         for (ir::Instruction* inst : to_erase) {
-            EraseFromParent(inst);
+            DetachOperands(inst);
+        }
+        for (ir::Instruction* inst : to_erase) {
+            EraseInstFromBlockList(inst);
         }
 
         return !to_erase.empty();
