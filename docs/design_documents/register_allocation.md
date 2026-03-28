@@ -7,10 +7,12 @@
 | 阶段 | 状态 | 内容 |
 |------|------|------|
 | **Build** | ✅ 已实现 | 活跃变量分析 + 干涉图构建 |
-| **Simplify + Select** | ✅ 已实现 | 低度数入栈 + 潜在溢出 + 乐观着色 |
-| Coalesce | 🔲 待实现 | George 准则合并 MOVE 对 |
-| Freeze | 🔲 待实现 | 冻结低度数 move-related 节点 |
-| Spill rewrite | 🔲 待实现 | 溢出代码插入 + Restart 循环 |
+| **Simplify** | ✅ 已实现 | 非 move-related 低度数节点入栈 |
+| **Coalesce** | ✅ 已实现 | George 准则合并 MOVE 对 |
+| **Freeze** | ✅ 已实现 | 冻结低度数 move-related 节点 |
+| **Spill** | ✅ 已实现 | 乐观溢出（Briggs）+ 溢出代码插入 |
+| **Select** | ✅ 已实现 | 弹栈贪心着色 + 合并节点颜色传播 |
+| **缓冲区重写** | ✅ 已实现 | vreg→物理寄存器替换 + MOVE 消除 + callee-saved 处理 |
 
 ---
 
@@ -22,35 +24,41 @@
 flowchart TD
     IR["ir::Module（优化后的 SSA IR）"]
     IR --> MIPS["MipsEmitter → FunctionEmitter"]
-    MIPS --> EMIT["EmitPrologue() + EmitBody()<br/>（全栈分配：所有值存栈，用 $t0-$t2 临时寄存器）"]
-    EMIT --> BUF["vector＜MipsInst＞ 缓冲区<br/>（完整的函数指令流）"]
+    MIPS --> EMIT["EmitPrologue() + EmitBody()<br/>（虚拟寄存器模式：每个 IR 值 → $vr0, $vr1, ...）"]
+    EMIT --> BUF["vector＜MipsInst＞ 缓冲区<br/>（完整的函数指令流，使用虚拟寄存器）"]
     BUF --> BUILD["<b>Build 阶段</b><br/>活跃变量分析 + 干涉图构建<br/>（纯分析，不改缓冲区）"]
-    BUILD --> SIMP["<b>Simplify + Select 阶段</b><br/>低度数入栈 → 潜在溢出 → 乐观着色<br/>（纯分析，不改缓冲区）"]
-    SIMP --> PEEP["RunPeephole()（O4 窥孔优化）"]
+    BUILD --> COLOR["<b>着色阶段</b><br/>Simplify → Coalesce → Freeze → Spill → Select<br/>（纯分析，输出 ColoringResult）"]
+    COLOR --> REWRITE["<b>缓冲区重写</b><br/>$vr* → $t*/$s* 替换<br/>溢出代码插入 + MOVE 消除<br/>+ callee-saved 寄存器保存/恢复"]
+    REWRITE --> PEEP["RunPeephole()（O4 窥孔优化）"]
     PEEP --> SER["Serialize() → mips.txt"]
 ```
 
-**在 `FunctionEmitter::Emit()` 中的具体接入点**（`src/mips/FunctionEmitter.cpp:15-31`）：
+**在 `FunctionEmitter::Emit()` 中的具体接入点**（`src/mips/FunctionEmitter.cpp:15-35`）：
 
 ```cpp
 void FunctionEmitter::Emit() {
     frame_.Build();
-    // Buffer 模式同时服务于 peephole (O4) 和寄存器分配 (O7)
     const bool kUseBuffer = options_.enable_peephole || options_.enable_reg_alloc;
     if (kUseBuffer) writer_.BeginBuffer();
 
     EmitPrologue();
+    if (options_.enable_reg_alloc) {
+        inst_emitter_.ReservePhiVRegsForFunction();
+    }
     EmitBody();
 
     if (options_.enable_reg_alloc) {
-        RegAllocator::Run(writer_.GetBuffer());  // ← Build 阶段在此触发
+        RegAllocator::Run(writer_.GetBuffer(), inst_emitter_.VRegSpillSlots(),
+                          frame_.GetFrameSize());
     }
 
-    if (kUseBuffer) writer_.FlushBuffer();       // peephole + 序列化
+    if (kUseBuffer) writer_.FlushBuffer();   // peephole + 序列化
 }
 ```
 
 **为什么 `kUseBuffer` 要同时检查两个开关？** 原来只有 `enable_peephole` 会触发 buffer 模式。但寄存器分配也需要在 `vector<MipsInst>` 上工作——它需要遍历完整的函数指令流来做活跃分析。如果用户只开启 `enable_reg_alloc` 而不开 `enable_peephole`，不启用 buffer 模式就没有指令可分析。因此改为两者任一开启即启用缓冲。
+
+**`ReservePhiVRegsForFunction()` 为什么在 `EmitBody()` 之前？** Phi 节点的虚拟寄存器必须在任何块发射之前预分配好——因为 phi 的结果可能在发射顺序上更早的块中被使用（如循环回边），如果不预留，使用侧找不到对应的 vreg 映射。
 
 ---
 
@@ -64,9 +72,28 @@ Chaitin-Briggs 算法是该领域最经典的算法（LLVM 和 GCC 早期版本�
 - **Coalesce（合并）**：能消除 `move` 指令——如果 `move $a, $b` 的源和目的不干涉，可以让它们使用同一个寄存器，`move` 指令直接消失
 - **可用寄存器数 K=18**：10 个 `$t` 寄存器 + 8 个 `$s` 寄存器，数量充裕，大多数函数无需溢出
 
+完整的算法循环：
+
+```mermaid
+flowchart TD
+    START["干涉图 + move 对列表"]
+    START --> SIMP{"Simplify<br/>非 move-related<br/>度 ＜ K？"}
+    SIMP -- "找到" --> PUSH1["入栈<br/>邻居度递减"]
+    PUSH1 --> SIMP
+    SIMP -- "未找到" --> COAL{"Coalesce<br/>George 准则<br/>可合并？"}
+    COAL -- "成功" --> SIMP
+    COAL -- "失败" --> FREEZE{"Freeze<br/>低度数<br/>move-related？"}
+    FREEZE -- "找到" --> DROP["丢弃其 pending moves"]
+    DROP --> SIMP
+    FREEZE -- "未找到" --> SPILL["Spill<br/>度最大者入栈<br/>（乐观 Briggs）"]
+    SPILL --> SIMP
+    SIMP -- "全部入栈" --> SELECT["Select<br/>弹栈贪心着色"]
+    SELECT --> DONE["ColoringResult"]
+```
+
 ---
 
-## 3. Build 阶段概述
+## 3. Build 阶段：活跃分析与干涉图构建
 
 Build 是 Chaitin-Briggs 的第一步，也是整个寄存器分配的数据基础。它回答两个问题：
 
@@ -77,10 +104,15 @@ Build 阶段是**纯分析**——它只读取指令缓冲区，不做任何修�
 
 ### 3.1 代码导读
 
+> **Build 阶段代码量**：`LivenessAnalysis.h`（145 行）+ `LivenessAnalysis.cpp`（642 行）≈ **787 行**
+
 ```
 include/mips/LivenessAnalysis.h    — 所有数据结构声明，阅读本节的起点
   ├─ GetDefs() / GetUses()          — 指令级 def/use 提取的接口
   ├─ RegIdMap                       — 寄存器名 ↔ 整数 ID 的双向映射
+  │    ├─ IsAllocatable()           — 判断是否为 $t/$s 可分配寄存器
+  │    ├─ IsVirtual()               — 判断是否为 $vr* 虚拟寄存器
+  │    └─ PaletteIndexOf()          — 物理寄存器 → 调色板颜色索引
   ├─ MipsBlock                      — MIPS 级基本块（buffer 的一个区间）
   ├─ InterferenceGraph              — 干涉图（邻接集 + 度数 + move 对）
   └─ LivenessResult + BuildLiveness — 分析结果捆绑 + 总入口
@@ -99,17 +131,6 @@ src/mips/LivenessAnalysis.cpp      — 全部实现，按以下顺序阅读：
   ├─ InterferenceGraph 方法             — AddEdge / AddMove / HasEdge / Degree
   ├─ BuildInterferenceGraph()          — 从 def + live-out 构建干涉图
   └─ BuildLiveness()                   — 总入口：串联上述所有步骤
-
-include/mips/RegAlloc.h            — 寄存器分配器入口 + ColoringResult 结构体
-  ├─ ColoringResult                 — 着色结果（color_by_node + actual_spills）
-  ├─ SimplifyAndSelect()            — Simplify + potential spill + Select
-  └─ RegAllocator::Run()            — 总入口
-
-src/mips/RegAlloc.cpp              — Simplify + Select 实现 + 调试输出，按以下顺序阅读：
-  ├─ kAllocatableRegNames[]         — 18 色调色板（$t0-$t9, $s0-$s7）
-  ├─ ColoringResult::ColoredAllocatableCount() — 统计着色成功的可分配节点数
-  ├─ SimplifyAndSelect()            — Simplify 循环 + potential spill + Select 着色
-  └─ RegAllocator::Run()            — Build → Simplify+Select → stderr dump
 ```
 
 ### 3.2 Build 的完整流水线
@@ -126,17 +147,15 @@ flowchart TD
     P6 --> RES["LivenessResult<br/>{RegIdMap, blocks, InterferenceGraph}"]
 ```
 
----
+### 3.3 指令级 def/use 提取
 
-## 4. 指令级 def/use 提取
-
-### 4.1 为什么需要它？
+#### 为什么需要它？
 
 活跃变量分析的基本输入是：每条指令**定义（写）哪些寄存器**、**使用（读）哪些寄存器**。IR 级别有天然的 def-use 链（SSA 的静态单赋值性质），但 MIPS 汇编级没有这种结构——必须从指令的操作码和字段中推导。
 
 `GetDefs()` 和 `GetUses()` 就是这个推导逻辑的实现。它们接受一条 `MipsInst`，根据 `op` 字段返回被定义/使用的寄存器名列表。
 
-### 4.2 完整的 def/use 映射表
+#### 完整的 def/use 映射表
 
 下表覆盖了 `MipsOpcode` 枚举中的所有变体（`src/mips/LivenessAnalysis.cpp:40-188`）：
 
@@ -158,7 +177,7 @@ flowchart TD
 | **Syscall** | `SYSCALL` | **`{$v0}`** | **`{$v0, $a0}`** | 系统调用号 + 参数 |
 | 非指令 | `LABEL`, `DIRECTIVE`... | (无) | (无) | 不参与分析 |
 
-### 4.3 SW/SB 的 "dst" 陷阱
+#### SW/SB 的 "dst" 陷阱
 
 `MipsInst` 的字段命名约定中，`SW` 和 `SB` 的 `dst` 字段存放的是**被写入内存的值寄存器**，而非被定义的目标寄存器（见 `include/mips/MipsInst.h:78`）。对活跃分析而言，`sw $t2, 8($sp)` 是在**读取** `$t2` 和 `$sp` 的值，不定义任何寄存器：
 
@@ -173,7 +192,7 @@ case MipsOpcode::SB:
 
 这是最容易写错的地方——如果把 `SW` 的 `dst` 当作 def，活跃分析会错误地认为该值在 `sw` 之后已"死亡"，导致后续的干涉图缺少关键边。
 
-### 4.4 JAL 的 caller-saved clobber 集
+#### JAL 的 caller-saved clobber 集
 
 函数调用（`JAL`）是 def/use 建模中最复杂的场景。在 MIPS 调用约定中，函数调用后**所有 caller-saved 寄存器的值都可能被破坏**。如果分析不建模这一点，跨调用活跃的值可能被错误地分配到 caller-saved 寄存器中。
 
@@ -206,7 +225,7 @@ case MipsOpcode::JAL: defs = CallerSavedRegs(); break;
 
 **JAL 为什么不在 use 集中列出 `$a0`-`$a3`？** 函数调用前设置参数的指令（如 `move $a0, $t0`）会通过正常的 def/use 链让 `$a0` 在调用点之前保持活跃。额外在 JAL 的 use 集中列出它们是冗余的，而且会引入不必要的干涉边。
 
-### 4.5 过滤逻辑：`PushIfValid()`
+#### 过滤逻辑：`PushIfValid()`
 
 `MipsInst` 的 `dst`/`src1`/`src2` 字段可能为空字符串（当操作码不使用该字段时），`$zero` 是常量零寄存器（永远不会被"写入"或需要分配）。`PushIfValid` 统一过滤这两类噪音：
 
@@ -219,17 +238,15 @@ static void PushIfValid(std::vector<std::string>& out, const std::string& reg) {
 }
 ```
 
----
+### 3.4 RegIdMap：寄存器名与整数 ID 的映射
 
-## 5. RegIdMap：寄存器名与整数 ID 的映射
-
-### 5.1 为什么需要映射？
+#### 为什么需要映射？
 
 活跃分析的核心操作是集合运算（并集、差集、成员查询）。如果集合的元素是 `std::string`（如 `"$t0"`），每次比较都是 O(n) 的字符串比较，且 `unordered_set<string>` 的哈希计算也不廉价。
 
 将寄存器名映射为连续的整数 ID 后，集合运算变为 `unordered_set<int>` 的操作——哈希是 O(1)，比较也是 O(1)，在迭代数据流的多轮循环中性能差距显著。
 
-### 5.2 映射的时机
+#### 映射的时机
 
 `RegIdMap` 不是预先填充的——它在 `ComputeBlockDefUse()` 扫描指令时通过 `GetOrCreate()` **按需填充**。遇到一个从未见过的寄存器名就分配一个新 ID。这意味着：
 
@@ -237,7 +254,7 @@ static void PushIfValid(std::vector<std::string>& out, const std::string& reg) {
 - ID 的分配顺序取决于指令扫描顺序，没有全局保证
 - 所有后续阶段（干涉图、着色）都通过同一个 `RegIdMap` 实例做 ID ↔ 名字的翻译
 
-### 5.3 可分配性判断
+#### 可分配性判断与虚拟寄存器
 
 ```cpp
 // src/mips/LivenessAnalysis.cpp:213-228
@@ -250,17 +267,17 @@ bool RegIdMap::IsAllocatable(const std::string& name) {
 }
 ```
 
-可分配寄存器共 **K = 18** 个（10 个 `$t` + 8 个 `$s`）。其他寄存器（`$sp`, `$ra`, `$v0`, `$a0`-`$a3`, `$zero` 等）参与活跃分析但不作为着色候选——它们是**预着色节点**（pre-colored），在图中有固定颜色。
+可分配寄存器共 **K = 18** 个（10 个 `$t` + 8 个 `$s`）。此外，`IsVirtual()` 判断 `$vr*` 前缀的虚拟寄存器——它们是着色的**候选节点**（candidate），而 `$t`/`$s` 是**预着色节点**（pre-colored），`$sp`/`$ra`/`$v0`/`$a0`-`$a3` 等参与活跃分析但既不可分配也不预着色。
 
----
+`PaletteIndexOf()` 将 `$t0`-`$t9` 映射到颜色 0-9，`$s0`-`$s7` 映射到颜色 10-17，供预着色初始化使用。
 
-## 6. MIPS 级基本块与 CFG 构建
+### 3.5 MIPS 级基本块与 CFG 构建
 
-### 6.1 为什么不复用 IR 级 CFG？
+#### 为什么不复用 IR 级 CFG？
 
 项目已有 IR 级的 `CFGBuilder`（`include/pass/CFGBuilder.h`），但它操作的是 `ir::BasicBlock`。寄存器分配工作在 MIPS 指令缓冲区上——指令发射后，IR 的块结构已经被"展平"为 `vector<MipsInst>` 中的 LABEL + 指令序列。我们需要从这个扁平序列中**重新发现**块边界和控制流。
 
-### 6.2 块切分：`PartitionBlocks()`
+#### 块切分：`PartitionBlocks()`
 
 算法很直接：扫描缓冲区，遇到 `MipsOpcode::LABEL` 就开始一个新 `MipsBlock`：
 
@@ -285,7 +302,7 @@ static std::vector<MipsBlock> PartitionBlocks(const std::vector<MipsInst>& buffe
 
 每个 `MipsBlock` 记录了它在缓冲区中的 `[start, end)` 范围。`start` 指向 LABEL 本身，LABEL 之后到下一个 LABEL 之前的所有指令都属于该块。
 
-### 6.3 后继识别：五种终结模式
+#### 后继识别：五种终结模式
 
 `BuildCFG()`（`src/mips/LivenessAnalysis.cpp:279-351`）通过分析每个块尾部的控制流指令来确定后继。`FindTerminators()` 从块末尾逆向扫描，找到最后两条真指令（跳过 BLANK/DIRECTIVE 等非指令标记）。
 
@@ -312,11 +329,9 @@ flowchart TD
 
 Build 阶段必须正确处理这两种形式，否则 CFG 的后继关系会出错。
 
----
+### 3.6 块级活跃变量分析
 
-## 7. 块级活跃变量分析
-
-### 7.1 数据流方程
+#### 数据流方程
 
 活跃变量是一个**反向数据流问题**：信息从程序的出口向入口传播。对每个基本块 B，定义：
 
@@ -332,7 +347,7 @@ out[B] = ∪ { in[S] | S ∈ succs(B) }       （后继的入口活跃 → 本�
 in[B]  = use[B] ∪ (out[B] - def[B])        （本块使用的 + 穿越本块的）
 ```
 
-### 7.2 计算 def[B] 和 use[B]
+#### 计算 def[B] 和 use[B]
 
 `ComputeBlockDefUse()`（`src/mips/LivenessAnalysis.cpp:358-385`）正向扫描每个块的指令：**use[B]** 只对「尚未记入 `def[B]`」的 use 计入（向上暴露）；**def[B]** 则对每条指令的 def **无条件** `insert`（完整 kill 集）。两者不对称是方程 `in = use ∪ (out - def)` 所要求的。
 
@@ -354,7 +369,7 @@ for (int i = blk.start; i < blk.end; ++i) {
 
 **为什么正向扫描而非逆向？** `use[B]` 的定义是"在定义之前使用"——正向扫描时，`block_def[bi]` 逐步积累，恰好可以判断某个 use 发生时该寄存器是否已被定义。逆向扫描虽然也能实现，但判定逻辑更绕。
 
-### 7.3 迭代求解：postorder 遍历
+#### 迭代求解：postorder 遍历
 
 活跃分析是反向问题，信息从后继流向前驱。使用**后序（postorder）** 遍历迭代可以加速收敛——后序保证一个块的后继在大多数情况下已被处理过，减少了"信息还没传到"导致的多余迭代。
 
@@ -385,7 +400,7 @@ while (changed) {
 
 **收敛性**：对可约 CFG（绝大多数结构化程序），通常 2-3 轮即收敛。不可约 CFG 在最坏情况下需要 O(循环嵌套深度) 轮。
 
-### 7.4 逆后序的迭代式 DFS
+#### 逆后序的迭代式 DFS
 
 `ComputeReversePostorder()`（`src/mips/LivenessAnalysis.cpp:388-424`）使用显式栈模拟递归 DFS，避免深层函数嵌套带来的栈溢出风险：
 
@@ -414,15 +429,13 @@ std::reverse(postorder.begin(), postorder.end());  // 反转得到逆后序
 
 `Frame` 结构记录了"当前正在 DFS 哪个块"以及"已经访问到第几个后继"。当所有后继都访问完毕，才将该块加入后序序列——这与递归版本中"递归返回时追加"完全等价。
 
----
+### 3.7 指令级活跃变量
 
-## 8. 指令级活跃变量
-
-### 8.1 为什么还需要指令级？
+#### 为什么还需要指令级？
 
 块级分析只给出了每个块入口/出口的活跃集合。但干涉图需要更细粒度的信息：**每条指令执行后，哪些寄存器是活的？** 只有知道了某条 `def` 指令执行后的 `live_out`，才能确定该 `def` 与哪些寄存器同时活跃（即产生干涉）。
 
-### 8.2 逆向扫描算法
+#### 逆向扫描算法
 
 `ComputeInstructionLiveness()`（`src/mips/LivenessAnalysis.cpp:477-504`）对每个块做一次从末尾到开头的逆向扫描：
 
@@ -447,11 +460,9 @@ for (int bi = 0; bi < static_cast<int>(blocks.size()); ++bi) {
 
 **先记录 live-out、再更新 live** 的顺序至关重要——`inst_live_out[i]` 反映的是指令 i **执行完毕后**的活跃状态，也就是说 i 的 def 已经生效。这与干涉图的构建规则一致："指令 i 定义了 d，d 与 i 执行后仍活跃的所有寄存器产生干涉"。
 
----
+### 3.8 干涉图构建
 
-## 9. 干涉图构建
-
-### 9.1 核心规则
+#### 核心规则
 
 干涉图是一个无向图：
 
@@ -464,7 +475,7 @@ for (int bi = 0; bi < static_cast<int>(blocks.size()); ++bi) {
 
 直观理解：指令 i 定义了 d，d 的新值从此时刻开始活跃；而 `inst_live_out[i]` 中的每个 r 在此时刻也是活跃的。两个同时活跃的值不能共用寄存器，所以产生干涉。
 
-### 9.2 MOVE 指令的特殊处理
+#### MOVE 指令的特殊处理
 
 MOVE 指令（`move $dst, $src`）是一条寄存器复制。如果 `$dst` 和 `$src` 被分配到同一个物理寄存器，这条 MOVE 就可以被完全消除——这正是 Coalesce 阶段的工作。
 
@@ -495,7 +506,7 @@ if (is_move && !buffer[i].dst.empty() && !buffer[i].src1.empty()) {
 
 **为什么不加边是安全的？** 在 `move $dst, $src` 执行后，`$dst` 和 `$src` 持有**相同的值**。如果它们被分配到同一寄存器，语义不变（复制自身）。但如果后续有指令重新定义了 `$src`，那时 `$dst` 和新的 `$src` 值就不同了——但此时会由那条重新定义指令的 live-out 自然产生正确的干涉边。
 
-### 9.3 `InterferenceGraph` 的数据结构
+#### `InterferenceGraph` 的数据结构
 
 ```cpp
 class InterferenceGraph {
@@ -507,31 +518,19 @@ class InterferenceGraph {
 };
 ```
 
-**为什么用 `unordered_set` 而非邻接矩阵？** MIPS 一个函数中出现的不同寄存器通常不超过 30 个，但典型的干涉图远非完全图。邻接集的空间复杂度为 O(V + E)，远优于 O(V²) 的邻接矩阵。同时 `HasEdge()` 和 `AddEdge()` 的 O(1) 平均时间复杂度满足需求。
+**为什么用 `unordered_set` 而非邻接矩阵？** MIPS 一个函数中出现的不同寄存器通常不超过数十个，但典型的干涉图远非完全图。邻接集的空间复杂度为 O(V + E)，远优于 O(V²) 的邻接矩阵。同时 `HasEdge()` 和 `AddEdge()` 的 O(1) 平均时间复杂度满足需求。
 
 `degree_` 数组单独维护而非每次调用 `adj_[node].size()` 计算，原因是后续 Simplify 阶段需要频繁查询度数，且节点被"移除"（暂时从图中取出）时度数需要递减更新——用独立数组更方便。
 
 ---
 
-## 10. Simplify + Select 阶段概述
+## 4. 着色阶段：Simplify → Coalesce → Freeze → Spill → Select
 
-Build 阶段产出了干涉图；下一步是**着色**——给每个可分配节点分配一个颜色（物理寄存器），使得相邻节点颜色不同。Simplify + Select 是 Chaitin-Briggs 算法的核心循环：
+Build 阶段产出了干涉图和 move 对列表；下一步是**着色**——给每个虚拟寄存器分配一个颜色（物理寄存器），使得相邻节点颜色不同。当前实现采用完整的 Chaitin-Briggs 四阶段优先级循环，替代了早期的简化版 `SimplifyAndSelect`。
 
-```mermaid
-flowchart TD
-    IG["干涉图<br/>(InterferenceGraph + RegIdMap)"]
-    IG --> CLS["节点分类<br/>allocatable vs. pre-colored"]
-    CLS --> SIMP["<b>Simplify</b><br/>度 ＜ K 的节点入栈<br/>邻居度数递减"]
-    SIMP --> STUCK{"所有可分配节点<br/>都入栈了？"}
-    STUCK -- "是" --> SEL["<b>Select</b><br/>从栈顶弹出，逐个着色"]
-    STUCK -- "否（全部 ≥ K）" --> SPILL["<b>Potential Spill</b><br/>选度数最大的节点入栈<br/>（标记为潜在溢出）"]
-    SPILL --> SIMP
-    SEL --> DONE["ColoringResult<br/>{color_by_node, actual_spills}"]
-```
+### 4.1 代码导读
 
-当前实现位于 `src/mips/RegAlloc.cpp:39-151`（`SimplifyAndSelect` 函数），仍然是**纯分析**——不修改指令缓冲区，仅输出着色结果到 stderr。
-
-### 10.1 代码导读
+> **着色阶段代码量**：`RegAlloc.h`（62 行）+ `RegAlloc.cpp` 中着色部分（`ColorWithCoalesce`，约 390 行）≈ **450 行**
 
 ```
 include/mips/RegAlloc.h
@@ -539,46 +538,105 @@ include/mips/RegAlloc.h
   │    ├─ kNumPaletteColors = 18    — K 值（$t0-$t9 + $s0-$s7）
   │    ├─ color_by_node             — 每个节点的颜色索引（-1 = 未着色）
   │    ├─ actual_spills             — 实际溢出的节点集合
-  │    └─ ColoredAllocatableCount() — 统计着色成功数
-  ├─ SimplifyAndSelect()            — Simplify + Spill + Select 入口
-  └─ RegAllocator::Run()            — 总流程：Build → Simplify+Select → dump
+  │    └─ ColoredAllocatableCount() — 统计着色成功数（仅计 $vr* 节点）
+  ├─ ColorWithCoalesce()            — 完整 Chaitin-Briggs 着色入口
+  └─ RegAllocator::Run()            — 总流程：Build → 着色 → 重写 → callee-saved
 
-src/mips/RegAlloc.cpp
-  ├─ kAllocatableRegNames[18]       — 调色板：颜色索引 → 物理寄存器名
-  ├─ SimplifyAndSelect()            — 核心算法（~110 行）
-  │    ├─ 节点分类（allocatable 数组）
-  │    ├─ eff_degree 初始化
-  │    ├─ Simplify 循环（度 < K → 入栈）
-  │    ├─ Potential Spill（度最大者入栈）
-  │    └─ Select（弹栈 → 贪心着色）
-  └─ RegAllocator::Run()            — Build + 干涉图 dump + 着色 + 着色结果 dump
+src/mips/RegAlloc.cpp — ColorWithCoalesce()（约 390 行）
+  ├─ 预着色初始化                    — 物理寄存器的固定颜色
+  ├─ is_cand lambda                 — 候选节点判定（仅 $vr*）
+  ├─ 可变工作图                      — adj_work / eff_degree / alias / pending_moves
+  ├─ 辅助 lambda 族                 — get_alias / active_adj / move_related_set /
+  │                                   decrement_degree / george_ok / george / combine
+  ├─ 主循环（while true）
+  │    ├─ Phase 1: Simplify         — 非 move-related + 度＜K → 入栈
+  │    ├─ Phase 2: Coalesce         — 清理过期 moves → George 尝试 → combine
+  │    ├─ Phase 3: Freeze           — 低度数 move-related 节点冻结
+  │    └─ Phase 4: Spill            — 度最大者乐观入栈
+  ├─ Select 循环                     — 弹栈 → 贪心着色（alias-resolved 邻居颜色）
+  └─ 颜色传播                        — 合并节点继承代表的颜色
 ```
 
----
+### 4.2 四阶段优先级循环
 
-## 11. 节点分类：可分配 vs. 预着色
+`ColorWithCoalesce()`（`src/mips/RegAlloc.cpp:87-462`）的核心是一个 `while(true)` 主循环。每次迭代按**优先级从高到低**尝试恰好一个阶段，成功后立即 `continue` 重新开始：
 
-干涉图中的节点分为两类，这是整个 Simplify+Select 的前提：
+```mermaid
+flowchart TD
+    ENTER["主循环入口"]
+    ENTER --> CHECK{"还有活跃<br/>候选节点？"}
+    CHECK -- "否" --> EXIT["退出循环 → Select"]
+    CHECK -- "是" --> P1{"Phase 1: Simplify<br/>非 move-related<br/>度 ＜ K？"}
+    P1 -- "找到 u" --> PUSH["u 入栈<br/>邻居度递减"]
+    PUSH --> ENTER
+    P1 -- "未找到" --> P2{"Phase 2: Coalesce<br/>George 准则成功？"}
+    P2 -- "合并成功" --> ENTER
+    P2 -- "全部失败" --> P3{"Phase 3: Freeze<br/>低度数 move-related？"}
+    P3 -- "找到 u" --> FMOVE["丢弃 u 的 pending moves"]
+    FMOVE --> ENTER
+    P3 -- "未找到" --> P4["Phase 4: Spill<br/>度最大者入栈"]
+    P4 --> ENTER
+```
+
+**终止性保证**：每次迭代必定执行以下之一：
+- Simplify/Spill：从活跃集中移除 ≥1 个节点（入栈）
+- Coalesce：移除 ≥1 个 pending move（并合并一个节点）
+- Freeze：移除 ≥1 个 pending move
+
+因此活跃节点数 + pending move 数严格单调递减，循环必然终止。
+
+### 4.3 数据结构与不变量
+
+`ColorWithCoalesce` 内部维护的可变状态：
+
+| 数据结构 | 类型 | 含义 | 不变量 |
+|---------|------|------|--------|
+| `adj_work[u]` | `vector<unordered_set<int>>` | 工作邻接表 | Coalesce 时 v→u 合并，u 继承 v 的邻居 |
+| `eff_degree[u]` | `vector<int>` | 活跃邻居计数 | 只计非 on_stack、非 coalesced 的邻居 |
+| `alias[u]` | `vector<int>` | Union-Find 代表（路径折半压缩） | `get_alias(u)` 返回当前有效代表 |
+| `on_stack[u]` | `vector<bool>` | 节点已入栈 | 入栈节点不参与 Simplify/Coalesce/Freeze |
+| `coalesced_flag[u]` | `vector<bool>` | 节点已被合并 | 被合并节点跟随代表的颜色 |
+| `pending_moves` | `list<pair<int,int>>` | 待处理 MOVE 对 | Coalesce/Freeze/Spill 逐步消耗 |
+
+**`get_alias` 的路径折半实现**（`src/mips/RegAlloc.cpp:131-139`）：
+
+```cpp
+auto get_alias = [&](int u) -> int {
+    while (alias[u] != u) {
+        alias[u] = alias[alias[u]];  // 路径折半：跳过一级
+        u = alias[u];
+    }
+    return u;
+};
+```
+
+路径折半是一种轻量级路径压缩——每次 `get_alias` 调用将链长减半，摊销近乎 O(1)，但实现比完全路径压缩简单得多。
+
+**`active_adj(u)` 为什么需要去重？**（`src/mips/RegAlloc.cpp:144-155`）Coalesce 合并 v→u 后，`adj_work[u]` 中可能出现多个原始 ID 解析到同一个 alias 代表。不去重会导致度数计算错误。
+
+### 4.4 节点分类：候选 vs. 预着色 vs. 非可分配
+
+干涉图中的节点分为三类，这是整个着色的前提：
 
 | 类型 | 寄存器 | 算法中的角色 |
 |------|--------|-------------|
-| **可分配** | `$t0`-`$t9`, `$s0`-`$s7` | 需要着色，参与 Simplify/Spill/Select |
-| **预着色** | `$sp`, `$ra`, `$v0`, `$a0`-`$a3` 等 | 颜色固定，**永不入栈**，仅作为邻居约束 |
+| **候选（candidate）** | `$vr0`, `$vr1`, ... | 需要着色，参与 Simplify/Coalesce/Freeze/Spill/Select |
+| **预着色（pre-colored）** | `$t0`-`$t9`, `$s0`-`$s7` | 颜色固定为调色板值，**永不入栈**，仅作为邻居约束 |
+| **非可分配** | `$sp`, `$ra`, `$v0`, `$a0`-`$a3` | 不参与着色，不消耗调色板颜色 |
 
 ```cpp
-// src/mips/RegAlloc.cpp:43-46
-std::vector<bool> allocatable(kNumNodes, false);
-for (int i = 0; i < kNumNodes; ++i) {
-    allocatable[i] = RegIdMap::IsAllocatable(reg_ids.GetName(i));
-}
+// src/mips/RegAlloc.cpp:103-108
+auto is_cand = [&](int u) -> bool {
+    return !precolored[u] && RegIdMap::IsAllocatable(reg_ids.GetName(u));
+};
 ```
 
-**预着色节点为什么不消耗调色板颜色？** 颜色空间是 `{$t0, $t1, ..., $s7}` 共 18 种。`$sp`、`$ra`、`$v0` 等不在这 18 种之中——它们不是"可用颜色"，所以在 Select 阶段查看邻居颜色时，预着色节点的 `color[nb]` 始终为 -1，自然不会占用任何调色板槽位。
+> **注意**：`IsAllocatable` 对 `$vr*` 虚拟寄存器也返回 `true`（它们是"可分配"的候选者），但虚拟寄存器不是预着色的。因此 `is_cand` 通过排除 `precolored` 精确匹配虚拟寄存器。
 
-### 11.1 调色板定义
+#### 调色板定义
 
 ```cpp
-// src/mips/RegAlloc.cpp:21-24
+// src/mips/RegAlloc.cpp:23-26
 const char* const kAllocatableRegNames[ColoringResult::kNumPaletteColors] = {
     "$t0", "$t1", "$t2", "$t3", "$t4", "$t5", "$t6", "$t7", "$t8",
     "$t9", "$s0", "$s1", "$s2", "$s3", "$s4", "$s5", "$s6", "$s7",
@@ -587,228 +645,406 @@ const char* const kAllocatableRegNames[ColoringResult::kNumPaletteColors] = {
 
 颜色索引 0-9 对应 `$t0`-`$t9`（caller-saved），10-17 对应 `$s0`-`$s7`（callee-saved）。着色完成后，`kAllocatableRegNames[color_by_node[i]]` 就是节点 i 被分配的物理寄存器。
 
----
+### 4.5 Phase 1: Simplify——低度数非 move-related 节点入栈
 
-## 12. Simplify：低度数节点入栈
-
-### 12.1 核心原理：鸽巢原理
+#### 核心原理：鸽巢原理
 
 **度数 < K 的节点一定能着色。** 直觉上：即使该节点的所有邻居都被着色且颜色各不相同，最多也只占用了 (度数) < K 种颜色，至少剩余一种颜色可用。
 
 因此可以安全地将度数 < K 的节点从图中"移除"（不实际删除，而是标记 + 度数递减），压入一个栈。移除后，其邻居的度数递减，可能产生新的 < K 节点——形成连锁反应。
 
-### 12.2 有效度数（`eff_degree`）
+#### 为什么要排除 move-related 节点？
 
-为了不修改原始 `InterferenceGraph`（后续还需用于 Select 阶段读取邻居），Simplify 阶段维护一份**有效度数的副本**：
-
-```cpp
-// src/mips/RegAlloc.cpp:48-51
-std::vector<int> eff_degree(kNumNodes);
-for (int i = 0; i < kNumNodes; ++i) {
-    eff_degree[i] = ig.Degree(i);
-}
-```
-
-当节点 u 入栈时，对 u 的每个不在栈上的邻居 nb 执行 `--eff_degree[nb]`。这**逻辑等价于从图中移除 u**，但不实际修改邻接表。
-
-### 12.3 Simplify 循环
+与早期的 `SimplifyAndSelect` 不同，完整版 Simplify 只处理**非 move-related** 的节点。move-related 节点（出现在某条 pending MOVE 中的节点）应该先给 Coalesce 阶段机会——如果能合并，可以消除 MOVE 指令；过早地 Simplify 会让合并机会永远丧失。
 
 ```cpp
-// src/mips/RegAlloc.cpp:66-84（简化展示）
-bool simplified = true;
-while (simplified) {
-    simplified = false;
-    for (int u = 0; u < kNumNodes; ++u) {
-        if (!allocatable[u] || on_stack[u]) continue;
-        if (eff_degree[u] < K) {
-            select_stack.push(u);
-            on_stack[u] = true;
-            for (int nb : ig.Neighbors(u)) {
-                if (!on_stack[nb]) --eff_degree[nb];    // 邻居度数递减
-            }
-            simplified = true;
-            break;    // 重新从头扫描——递减可能解锁新的 < K 节点
+// src/mips/RegAlloc.cpp:264-285（Phase 1 核心）
+const auto kMoveRel = move_related_set();
+for (int u = 0; u < kN; ++u) {
+    if (!is_cand(u) || on_stack[u] || coalesced_flag[u] || kMoveRel.count(u))
+        continue;
+    if (eff_degree[u] < kK) {
+        sel_stack.push(u);
+        on_stack[u] = true;
+        for (int t : active_adj(u)) {
+            decrement_degree(t);
         }
+        simplified = true;
+        break;    // 重新从头——递减可能解锁新节点
     }
 }
 ```
 
-**为什么每次入栈后 `break` 重新扫描？** 节点 u 入栈后，其邻居的 `eff_degree` 发生了变化。如果不重新扫描，可能会错过因递减而刚好变为 < K 的邻居。虽然用 worklist 可以实现 O(V+E) 的效率，但当前全栈分配下节点数很少（~10-30），O(V²) 的线性扫描完全可接受。
+**为什么每次入栈后 `break` 重新扫描？** 节点 u 入栈后，其邻居的 `eff_degree` 发生了变化。如果不重新扫描，可能会错过因递减而刚好变为 < K 的邻居。虽然用 worklist 可以实现 O(V+E) 的效率，但当前节点数较少（~10-100），O(V²) 的线性扫描完全可接受。
 
----
+### 4.6 Phase 2: Coalesce——George 准则合并 MOVE 对
 
-## 13. Potential Spill：溢出候选选择
+#### 何时触发？
 
-### 13.1 何时触发？
+当 Simplify 无法找到任何非 move-related 的低度数节点时，进入 Coalesce 阶段。目标是尝试合并 MOVE 指令的两端，使它们共享同一颜色，从而在重写阶段消除 MOVE。
 
-当 Simplify 无法继续（所有剩余可分配节点的 `eff_degree >= K`），但仍有可分配节点未入栈时，必须选一个节点标记为"潜在溢出"（potential spill），强制入栈以解除僵局。
+#### George 准则
 
-### 13.2 溢出启发式
+George 准则判断"将 v 合并到 u 中是否安全"：
 
-当前使用最简单的启发式算法——**选有效度数最大的节点**：
+> **George(u, v)**: 对于 v 的每个活跃邻居 t，以下至少一项成立：
+> 1. t 的度数 < K（t 是低度数节点，合并不会增加着色难度）
+> 2. t 是预着色节点（固定颜色，不影响调色板使用）
+> 3. t 已经与 u 有干涉边（合并不会创造新的约束）
+
+直觉上：如果 v 的每个邻居要么已经是 u 的邻居（没有新约束），要么度数很低（不会导致着色失败），那么合并 v→u 不会让任何节点变得"更难着色"。
 
 ```cpp
-// src/mips/RegAlloc.cpp:92-104
-int victim = -1;
-int best_deg = -1;
-for (int u = 0; u < kNumNodes; ++u) {
-    if (!allocatable[u] || on_stack[u]) continue;
-    int deg = eff_degree[u];
-    if (deg > best_deg) {
-        best_deg = deg;
+// src/mips/RegAlloc.cpp:183-201
+auto george_ok = [&](int t, int u) -> bool {
+    const int kT = get_alias(t);
+    return eff_degree[kT] < kK || precolored[kT] || adj_work[u].count(kT) > 0;
+};
+
+auto george = [&](int u, int v) -> bool {
+    for (int t : active_adj(v)) {
+        if (!george_ok(t, u)) return false;
+    }
+    return true;
+};
+```
+
+#### Coalesce 的两步流程
+
+**第一步：清理过期 moves**（`src/mips/RegAlloc.cpp:291-313`）
+
+在尝试 George 之前，先从 `pending_moves` 中移除已经无效的条目：
+
+| 移除条件 | 原因 |
+|---------|------|
+| `alias(x) == alias(y)` | 两端已经被合并为同一代表 |
+| x 或 y 在栈上 / 已被合并 | 节点已离开活跃集 |
+| x、y 均为预着色 | 两个物理寄存器无法合并 |
+| x 与 y 干涉 | 存在干涉边，合并不安全（constrained move） |
+| x 或 y 非可分配且非预着色 | 如 `$v0`、`$a0`——没有调色板颜色可分配 |
+
+**第二步：尝试 George 合并**（`src/mips/RegAlloc.cpp:315-343`）
+
+对每个幸存的 pending move `(u, v)`：
+
+```cpp
+// 如果 v 是预着色节点，交换使 u 成为固定颜色的存活者
+if (precolored[v]) std::swap(u, v);
+
+// 正向尝试：u 存活，v 被吸收
+if (george(u, v)) { combine(u, v); break; }
+
+// 反向尝试（仅当 u 非预着色时）：v 存活，u 被吸收
+if (!precolored[u] && george(v, u)) { combine(v, u); break; }
+```
+
+**为什么需要双向尝试？** George 准则不是对称的——它检查的是被吸收方的邻居，而非存活方的。对于两个虚拟寄存器，`george(u, v)` 和 `george(v, u)` 可能给出不同结果。
+
+#### `combine(u, v)` 的合并操作
+
+```cpp
+// src/mips/RegAlloc.cpp:208-233
+auto combine = [&](int u, int v) {
+    coalesced_flag[v] = true;
+    alias[v] = u;                       // v 跟随 u
+    for (int t_raw : adj_work[v]) {
+        const int kT = get_alias(t_raw);
+        if (kT == u || kT == v) continue;
+
+        const bool kIsNewEdge = adj_work[u].insert(kT).second;
+        if (kIsNewEdge) {
+            adj_work[kT].insert(u);     // u、kT 互相添加
+            ++eff_degree[u];            // u 多了一个活跃邻居
+            ++eff_degree[kT];           // kT 多了一个活跃邻居
+        }
+        decrement_degree(kT);           // kT 少了 v 这个活跃邻居
+    }
+};
+```
+
+**度数变化的净效果**：对于 v 的邻居 kT：
+- 如果 (u, kT) 是新边：kT 先 +1（新邻居 u）再 -1（失去邻居 v）= 净变化 0
+- 如果 (u, kT) 已存在：kT 不 +1，只 -1 = 净变化 -1
+
+这种度数维护确保了 Simplify 阶段的连锁反应正确触发。
+
+### 4.7 Phase 3: Freeze——冻结低度数 move-related 节点
+
+#### 何时触发？
+
+当 Simplify 和 Coalesce 都无法推进时——所有非 move-related 节点度数 ≥ K，且没有 pending move 满足 George 准则——进入 Freeze 阶段。
+
+#### Freeze 做什么？
+
+找到一个**低度数（< K）的 move-related** 候选节点 u，丢弃它的所有 pending moves：
+
+```cpp
+// src/mips/RegAlloc.cpp:348-374（Phase 3 核心）
+const auto kMoveRel = move_related_set();
+for (int u = 0; u < kN; ++u) {
+    if (!is_cand(u) || on_stack[u] || coalesced_flag[u]) continue;
+    if (kMoveRel.count(u) && eff_degree[u] < kK) {
+        // 移除所有引用 u 的 pending moves
+        auto mit = pending_moves.begin();
+        while (mit != pending_moves.end()) {
+            if (get_alias(mit->first) == u || get_alias(mit->second) == u)
+                mit = pending_moves.erase(mit);
+            else ++mit;
+        }
+        frozen = true;
+        break;
+    }
+}
+```
+
+**冻结后会发生什么？** u 不再是 move-related（它的 pending moves 全被删了）。下一轮循环中，Simplify 会发现 u 是一个度 < K 的非 move-related 节点，直接入栈——这正是 Freeze 的目的：**放弃合并机会，换取 Simplify 的推进**。
+
+**为什么选低度数节点？** 低度数节点本来就能保证着色成功（鸽巢原理），冻结它损失最小——只是失去了一次 MOVE 消除的机会。如果冻结高度数节点，不仅失去 MOVE 消除，还可能导致该节点溢出。
+
+### 4.8 Phase 4: Spill——乐观溢出
+
+#### 何时触发？
+
+当 Simplify、Coalesce、Freeze 都无法推进时——所有剩余候选节点度数 ≥ K——必须选择一个节点进行"潜在溢出"，强制入栈以解除僵局。
+
+#### 溢出启发式
+
+当前使用**最大度数**启发式——选度数最高的节点入栈：
+
+```cpp
+// src/mips/RegAlloc.cpp:382-414（Phase 4 核心）
+int victim = -1, best_deg = -1;
+for (int u = 0; u < kN; ++u) {
+    if (!is_cand(u) || on_stack[u] || coalesced_flag[u]) continue;
+    if (eff_degree[u] > best_deg) {
+        best_deg = eff_degree[u];
         victim = u;
     }
 }
+// 清除 victim 的 pending moves，然后入栈
+sel_stack.push(victim);
+on_stack[victim] = true;
+for (int t : active_adj(victim)) decrement_degree(t);
 ```
 
 **为什么选度数最大？** 移除高度数节点能最大程度释放邻居的度数压力，可能让更多邻居变为 < K，重新启动 Simplify 连锁反应。
 
-潜在溢出节点被压入栈后，与正常 Simplify 节点走同一条路径——入栈、邻居递减。区别在于 Select 阶段：正常节点**保证**能着色，而潜在溢出节点可能着色失败。
+**为什么在 Spill 前也清除 pending moves？** victim 即将入栈，它的 MOVE 合并机会已经没有了。清除 pending moves 可以让 victim 的 move-related 邻居变为非 move-related，从而解锁更多 Simplify 机会。
 
-### 13.3 外层循环：Simplify 与 Spill 交替
+### 4.9 Select：乐观着色
 
-```cpp
-// src/mips/RegAlloc.cpp:66-113（整体结构）
-while (any_allocatable_left()) {
-    // 1. 先尽可能 Simplify
-    while (simplified) { ... }
+#### Briggs 的核心创新
 
-    if (!any_allocatable_left()) break;
+Chaitin 的原始算法在 Simplify 阶段就决定溢出——度 >= K 的节点直接标记为溢出。Briggs 改进为**乐观（optimistic）**策略：先把度 >= K 的节点也入栈（Phase 4），到 Select 阶段再看能否着色。
 
-    // 2. Simplify 卡住 → 选一个 victim 做 potential spill
-    // 3. victim 入栈，邻居度递减 → 回到步骤 1
-}
-```
+关键洞察：度 >= K 意味着**最坏情况下**邻居占满所有颜色，但实际上邻居之间可能共享颜色。例如一个度=20 的节点在 K=18 的图中，如果其 20 个邻居只使用了 15 种颜色，该节点仍然可以着色成功。
 
-这个循环保证**所有可分配节点最终都会入栈**——要么通过 Simplify（度 < K），要么通过 Spill（强制）。
-
----
-
-## 14. Select：乐观着色
-
-### 14.1 Briggs 的核心创新
-
-Chaitin 的原始算法在 Simplify 阶段就决定溢出——度 >= K 的节点直接标记为溢出。Briggs 改进为**乐观（optimistic）**策略：先把度 >= K 的节点也入栈，到 Select 阶段再看能否着色。
-
-关键洞察：度 >= K 意味着**最坏情况下**邻居占满所有颜色，但实际上邻居之间可能共享颜色。例如一个度=5 的节点在 K=3 的图中，如果其 5 个邻居只使用了 2 种颜色，该节点仍然可以着色成功。
-
-### 14.2 Select 算法
+#### Select 算法
 
 从栈顶逐个弹出节点，尝试分配第一个未被已着色邻居占用的颜色：
 
 ```cpp
-// src/mips/RegAlloc.cpp:116-145
-std::vector<int> color(kNumNodes, -1);
-std::unordered_set<int> actual_spills;
+// src/mips/RegAlloc.cpp:417-462（Select）
+while (!sel_stack.empty()) {
+    int u = sel_stack.top();
+    sel_stack.pop();
 
-while (!select_stack.empty()) {
-    int node = select_stack.top();
-    select_stack.pop();
-
-    // 收集已着色邻居使用的颜色
-    std::vector<bool> used(K, false);
-    for (int nb : ig.Neighbors(node)) {
-        int c = color[nb];
-        if (c >= 0 && c < K) used[c] = true;
+    // 收集已着色邻居使用的颜色（通过 alias 处理合并节点）
+    std::vector<bool> used(kK, false);
+    for (int nb_raw : adj_work[u]) {
+        const int kNb = get_alias(nb_raw);      // ← alias-resolved！
+        int c = color[kNb];
+        if (c >= 0 && c < kK) used[c] = true;
     }
 
     // 选第一个未被使用的颜色
     int chosen = -1;
-    for (int c = 0; c < K; ++c) {
+    for (int c = 0; c < kK; ++c) {
         if (!used[c]) { chosen = c; break; }
     }
 
-    if (chosen >= 0) {
-        color[node] = chosen;       // 着色成功
-    } else {
-        actual_spills.insert(node);  // 乐观着色失败 → 实际溢出
-    }
+    if (chosen >= 0) color[u] = chosen;          // 着色成功
+    else actual_spills.insert(u);                 // 乐观失败 → 实际溢出
 }
 ```
+
+**为什么需要 `get_alias`？** 在 Coalesce 阶段，节点 v 被合并到 u 中。`adj_work` 中可能仍存放 v 的原始 ID。通过 `get_alias(nb_raw)` 解析到当前代表，才能读取到代表的颜色——否则会访问到 v 的未初始化颜色值。
 
 **Select 的弹出顺序至关重要。** 栈是后进先出的——Simplify 阶段最后入栈的节点最先弹出。最后入栈的通常是"最容易着色的"（因为是在图最稀疏时被移除的），它们先被着色，为后续弹出的高度数节点提供了已知的颜色信息。
 
-### 14.3 着色结果的数据结构
+### 4.10 颜色传播：合并节点继承代表颜色
+
+Select 完成后，所有入栈节点已着色或标记为溢出。但被 Coalesce 合并的节点从未入栈——它们的颜色需要从代表传播过来：
 
 ```cpp
-// include/mips/RegAlloc.h:26-37
-struct ColoringResult {
-    static constexpr int kNumPaletteColors = 18;    // K = 18
-
-    std::vector<int> color_by_node;    // 平行于 RegIdMap 的 ID 空间
-    std::unordered_set<int> actual_spills;
-
-    int ColoredAllocatableCount(const RegIdMap& reg_ids) const;
-};
-```
-
-`color_by_node[i]` 的含义：
-- `-1`：节点 i 是预着色节点（不参与着色），或着色失败（实际溢出）
-- `0`-`17`：着色成功，对应 `kAllocatableRegNames[color]`
-
-### 14.4 预着色节点在 Select 中的表现
-
-预着色节点（`$sp`、`$ra` 等）从未入栈，所以不会被 Select 弹出处理。它们的 `color[nb]` 始终为 -1。当某个可分配节点查看邻居颜色时，预着色邻居的 -1 不会标记 `used` 数组的任何位置——**预着色节点不消耗调色板颜色**。
-
-这在逻辑上是正确的：`$sp` 不是 `$t0`-`$s7` 中的任何一个，它们根本不在同一个颜色空间中，没有冲突。
-
-### 14.5 已知局限：预着色度数膨胀
-
-当前 `eff_degree` 初始化自 `ig.Degree(i)`，它计入了**所有**邻居——包括预着色节点。但预着色节点：
-
-1. 不入栈 → 它们的"移除"永远不会递减邻居度数
-2. 不消耗颜色 → Select 阶段它们不影响着色
-
-这意味着 Simplify 阶段可能过度保守。例如：某节点有 15 个预着色邻居 + 5 个可分配邻居，`eff_degree = 20 >= K = 18`，无法 Simplify，只能作为 potential spill 入栈。但 Select 阶段实际只有 5 个邻居消耗颜色，轻松着色成功。
-
-**Briggs 乐观着色完美兜底了这个问题**——potential spill 并不意味着真的溢出，Select 阶段会发现它可以着色。因此正确性不受影响，只是 Simplify 的效率略低。后续优化可以在度数计算时**只计可分配邻居**。
-
----
-
-## 15. `RegAllocator::Run()`：完整流程
-
-`Run()`（`src/mips/RegAlloc.cpp:153-207`）串联 Build 和 Simplify+Select，并输出完整的调试信息：
-
-```cpp
-void RegAllocator::Run(std::vector<MipsInst>& buffer) {
-    // 1 Build：活跃分析 + 干涉图
-    LivenessResult result = BuildLiveness(buffer);
-
-    // 2 输出干涉图概览到 stderr（节点、度数、邻接表、move 对）
-    // ...（省略调试输出代码）...
-
-    // 3 Simplify + Select：着色
-    ColoringResult cr = SimplifyAndSelect(result.ig, result.reg_ids);
-
-    // 4 输出着色结果到 stderr
-    std::cerr << "[RegAlloc] Coloring result: " << cr.ColoredAllocatableCount(reg_ids)
-              << " colored, " << cr.actual_spills.size() << " spilled (K=18)\n";
-
-    for (int i = 0; i < kNumRegs; ++i) {
-        if (!RegIdMap::IsAllocatable(reg_ids.GetName(i))) continue;
-        int palette_idx = cr.color_by_node[i];
-        if (cr.actual_spills.count(i))
-            std::cerr << "  " << reg_ids.GetName(i) << " -> (spilled)\n";
-        else if (palette_idx >= 0)
-            std::cerr << "  " << reg_ids.GetName(i) << " -> "
-                      << kAllocatableRegNames[palette_idx] << " (color " << palette_idx << ")\n";
+// src/mips/RegAlloc.cpp:451-456
+for (int i = 0; i < kN; ++i) {
+    if (coalesced_flag[i]) {
+        color[i] = color[get_alias(i)];  // 继承代表的颜色
     }
 }
 ```
 
-**当前阶段仍不修改缓冲区**——`mips.txt` 输出与关闭 `enable_reg_alloc` 时完全一致。着色结果仅输出到 stderr，供手工验证。
+这正是 Coalesce 消除 MOVE 的机制：如果 `move $vr3, $vr7` 的 `$vr7` 被合并到 `$vr3` 中，两者获得相同颜色——重写阶段将检测到 `$dst == $src` 并删除这条 MOVE。
+
+### 4.11 预着色节点在着色中的表现
+
+预着色节点（`$t0`-`$t9`, `$s0`-`$s7`）从未入栈，所以不会被 Select 弹出处理。但它们的 `color[nb]` 在初始化时已经设置为正确的调色板索引——当某个候选节点查看邻居颜色时，预着色邻居的颜色值会正确标记 `used` 数组。
+
+**非可分配节点**（`$sp`、`$ra` 等）的 `color[nb]` 始终为 -1，不会标记 `used` 的任何位置——它们不在调色板空间中，没有冲突。
 
 ---
 
-## 16. 文件结构速查
+## 5. 缓冲区重写：从虚拟寄存器到物理寄存器
+
+着色完成后，`ColoringResult` 告诉我们每个虚拟寄存器应该使用哪个物理寄存器（或需要溢出）。重写阶段将缓冲区中的所有 `$vr*` 替换为实际的 `$t*`/`$s*`，并处理溢出和 callee-saved 寄存器保存。
+
+### 5.1 代码导读
+
+> **重写阶段代码量**：`RegAlloc.cpp` 中重写部分（约 290 行）
+
+```
+src/mips/RegAlloc.cpp — 缓冲区重写
+  ├─ ParseVRegSuffix()              — 从 "$vr42" 提取数字 42
+  ├─ MakeLw() / MakeSw()           — 构造 lw/sw 指令的辅助函数
+  ├─ IsCalleeSavedReg()            — 判断 $s0-$s7
+  ├─ MapRegName()                  — vreg → 物理寄存器名（含溢出 load 插入）
+  ├─ MapDefReg()                   — vreg def → 物理寄存器名（含溢出 $k0 替换）
+  ├─ SpillStoreIfNeeded()          — 溢出 def 后插入 sw 到栈槽
+  ├─ AppendRewritten()             — 组装 prefix + 指令 + suffix
+  ├─ RewriteInstruction()          — 单条指令完整重写（含 MOVE 消除）
+  ├─ RewriteBuffer()               — 遍历整个缓冲区，逐条重写
+  ├─ AdjustStackFrameForCalleeSaved() — 栈帧偏移调整
+  └─ ApplyCalleeSaved()            — 扫描 $s* 使用 → 插入 sw/lw 保存/恢复
+```
+
+### 5.2 虚拟寄存器映射：`MapRegName` 与 `MapDefReg`
+
+每个虚拟寄存器的重写路径取决于它是否被溢出：
+
+```mermaid
+flowchart TD
+    VREG["$vr42"]
+    VREG --> SPILL{"在 actual_spills 中？"}
+    SPILL -- "否" --> COLOR["查 color_by_node → 颜色索引 c"]
+    COLOR --> PHYS["返回 kAllocatableRegNames[c]<br/>（如 $t3）"]
+    SPILL -- "是" --> USE{"是 use 还是 def？"}
+    USE -- "use" --> LOAD["插入 lw $k0/k1, offset($sp)<br/>返回 $k0 或 $k1"]
+    USE -- "def" --> DEF["返回 $k0<br/>指令后插入 sw $k0, offset($sp)"]
+```
+
+**`$k0`/`$k1` 的角色**：MIPS 架构保留了 `$k0`、`$k1` 作为内核寄存器，用户程序不使用。我们将它们用作溢出代码的临时载体——每条指令最多有 2 个溢出操作数（1 个 def + 1 个 use），正好对应 `$k0` 和 `$k1`。
+
+```cpp
+// src/mips/RegAlloc.cpp:464-487（MapRegName 核心逻辑）
+static std::string MapRegName(const std::string& reg, /* ... */, bool is_use) {
+    if (reg.empty() || !RegIdMap::IsVirtual(reg)) return reg;  // 非虚拟寄存器不动
+
+    int node = reg_ids.Get(reg);
+    if (cr.actual_spills.count(node)) {
+        // 溢出路径：分配 scratch，use 时插入 lw
+        const std::string kTmp = scratch_used == 0 ? "$k0" : "$k1";
+        ++scratch_used;
+        if (is_use) prefix.push_back(MakeLw(kTmp, offset, "$sp"));
+        return kTmp;
+    }
+    // 着色路径：直接返回物理寄存器名
+    return kAllocatableRegNames[cr.color_by_node[node]];
+}
+```
+
+### 5.3 MOVE 消除
+
+Coalesce 的最终收益在重写阶段兑现。当 MOVE 的 dst 和 src 解析到**同一个物理寄存器**时，这条 MOVE 是一个 no-op，可以直接消除：
+
+```cpp
+// src/mips/RegAlloc.cpp:602-610（MOVE 消除）
+case MipsOpcode::MOVE:
+    m.dst = MapDefReg(inst.dst, reg_ids, cr);
+    m.src1 = MapRegName(inst.src1, reg_ids, cr, spill_slots, prefix, scratch, true);
+    // 如果 dst == src 且无溢出前缀，MOVE 是 no-op
+    if (inst.op == MipsOpcode::MOVE && m.dst == m.src1 && prefix.empty() &&
+        m.dst != "$k0" && m.dst != "$k1") {
+        return out;  // out 为空：MOVE 被消除
+    }
+```
+
+**为什么排除 `$k0`/`$k1`？** 当 MOVE 两端都溢出时，`MapDefReg` 和 `MapRegName` 都返回 `$k0`。但这并不意味着值相同——use 端的 `$k0` 是从栈槽 A 加载的，def 端的 `$k0` 需要写回栈槽 B。此时 MOVE 不能消除，后续的 `sw` 仍然需要执行。
+
+### 5.4 溢出代码插入模式
+
+对于一条包含溢出操作数的指令，重写后的输出格式为：
+
+```
+[prefix]    lw $k0, offsetA($sp)     ← 溢出 use 的加载
+[prefix]    lw $k1, offsetB($sp)     ← 第二个溢出 use 的加载（如有）
+[指令本身]   addu $k0, $k0, $k1      ← 原指令，vreg 已替换为 $k0/$k1
+[suffix]    sw $k0, offsetC($sp)     ← 溢出 def 的存储
+```
+
+`AppendRewritten()` 负责组装这个 prefix + 指令 + suffix 序列。
+
+### 5.5 Callee-saved 寄存器处理
+
+如果着色结果使用了 `$s0`-`$s7` 中的任意寄存器，函数必须在入口保存、出口恢复它们（MIPS 调用约定要求 callee-saved 寄存器由被调用者保存）。
+
+`ApplyCalleeSaved()`（`src/mips/RegAlloc.cpp:674-726`）的处理分三步：
+
+1. **扫描缓冲区**，收集所有出现过的 `$s*` 寄存器
+2. **调整栈帧**（`AdjustStackFrameForCalleeSaved`）：将 prologue 的 `addiu $sp, $sp, -F` 扩大 `4 * 使用的 $s 寄存器数`，并把所有 `0($sp)` 以上的偏移都上移相应距离
+3. **插入保存/恢复指令**：在 prologue 的 `addiu $sp` 之后插入 `sw $s*, offset($sp)`，在 epilogue 的 `lw $ra` 之前插入 `lw $s*, offset($sp)`
+
+```mermaid
+flowchart LR
+    SCAN["扫描 buffer<br/>收集 {$s0, $s2, $s5}"] --> ADJ["AdjustStackFrame<br/>F → F + 12<br/>所有 offset += 12"]
+    ADJ --> SAVE["prologue 后插入<br/>sw $s0, 0($sp)<br/>sw $s2, 4($sp)<br/>sw $s5, 8($sp)"]
+    SAVE --> RESTORE["epilogue 前插入<br/>lw $s5, 8($sp)<br/>lw $s2, 4($sp)<br/>lw $s0, 0($sp)"]
+```
+
+**`AdjustStackFrameForCalleeSaved` 为什么只调整 magnitude == `original_frame_size` 的 `addiu $sp, $sp, ±F`？** 函数中可能存在**调用点的栈帧调整**（`addiu $sp, $sp, ±kExtraArgArea`），它们的 magnitude 不等于 `original_frame_size`。这些调用点的调整不应被修改——它们管理的是传递给被调用者的额外参数区域，与 callee-saved 无关。
+
+---
+
+## 6. `RegAllocator::Run()`：完整流程
+
+`Run()`（`src/mips/RegAlloc.cpp:728-754`）串联所有阶段：
+
+```cpp
+void RegAllocator::Run(std::vector<MipsInst>& buffer,
+                       const std::vector<int>& vreg_spill_slots,
+                       int original_frame_size) {
+    // 1. Build：活跃分析 + 干涉图
+    LivenessResult result = BuildLiveness(buffer);
+
+    // 2. 着色：Simplify → Coalesce → Freeze → Spill → Select
+    ColoringResult cr = ColorWithCoalesce(result.ig, result.reg_ids);
+
+    // 3. 缓冲区重写：$vr* → 物理寄存器 + 溢出代码
+    RewriteBuffer(buffer, result.reg_ids, cr, vreg_spill_slots);
+
+    // 4. Callee-saved：扫描 $s* 使用，插入保存/恢复，调整栈帧
+    ApplyCalleeSaved(buffer, original_frame_size);
+}
+```
+
+入参说明：
+- `buffer`：`AsmWriter` 的结构化指令缓冲区，重写后原地替换
+- `vreg_spill_slots`：第 i 个虚拟寄存器 `$vr<i>` 的栈槽偏移（来自 `InstructionEmitter`），溢出代码使用
+- `original_frame_size`：`StackFrame::GetFrameSize()` 的原始值，用于 callee-saved 栈帧调整时区分 prologue/epilogue 与 call-site 的 `addiu $sp`
+
+---
+
+## 7. 文件结构速查
+
+> **整个寄存器分配模块总代码量**：约 **1600 行**（不含 `InstructionEmitter` 的虚拟寄存器发射和 `FunctionEmitter` 的接入胶水代码）
 
 ```
 include/mips/
-  LivenessAnalysis.h    ← GetDefs/GetUses + RegIdMap + MipsBlock + InterferenceGraph + BuildLiveness
-  RegAlloc.h            ← ColoringResult + SimplifyAndSelect() + RegAllocator::Run()
+  LivenessAnalysis.h  (145 行)  ← GetDefs/GetUses + RegIdMap + MipsBlock + InterferenceGraph
+  RegAlloc.h          (62 行)   ← ColoringResult + ColorWithCoalesce() + RegAllocator::Run()
 
 src/mips/
-  LivenessAnalysis.cpp  ← Build 阶段的完整实现（~620 行）
+  LivenessAnalysis.cpp (642 行) ← Build 阶段完整实现
     ├─ PushIfValid / CallerSavedRegs    辅助函数
     ├─ GetDefs / GetUses                指令级 def/use 提取
     ├─ RegIdMap                         寄存器名 ↔ 整数 ID
@@ -821,35 +1057,57 @@ src/mips/
     ├─ InterferenceGraph                邻接集 + 度数 + move 对
     ├─ BuildInterferenceGraph           def × live_out → 干涉边
     └─ BuildLiveness                    总入口：串联六个步骤
-  RegAlloc.cpp          ← Simplify + Select + 调试输出（~210 行）
+
+  RegAlloc.cpp (754 行) ← 着色 + 缓冲区重写
     ├─ kAllocatableRegNames[18]         调色板定义
-    ├─ ColoringResult::ColoredAllocatableCount()
-    ├─ SimplifyAndSelect()              核心着色算法
-    └─ RegAllocator::Run()              Build → 着色 → dump
-  FunctionEmitter.cpp   ← Emit() 中的 RegAllocator::Run() 接入（3 行改动）
+    ├─ ParseVRegSuffix / MakeLw / MakeSw  辅助函数
+    ├─ ColoredAllocatableCount()        统计着色成功数
+    ├─ ColorWithCoalesce()              完整 Chaitin-Briggs 着色（~390 行）
+    │    ├─ 预着色 + is_cand + 工作图初始化
+    │    ├─ 辅助 lambda：get_alias / active_adj / george / combine ...
+    │    ├─ 主循环：Simplify → Coalesce → Freeze → Spill
+    │    ├─ Select：弹栈贪心着色
+    │    └─ 颜色传播：合并节点继承代表颜色
+    ├─ MapRegName / MapDefReg           vreg → 物理寄存器映射
+    ├─ SpillStoreIfNeeded               溢出 def 后 sw
+    ├─ RewriteInstruction               单条指令重写 + MOVE 消除
+    ├─ RewriteBuffer                    全缓冲区重写
+    ├─ AdjustStackFrameForCalleeSaved   栈帧偏移调整
+    ├─ ApplyCalleeSaved                 $s* 保存/恢复插入
+    └─ RegAllocator::Run()              Build → 着色 → 重写 → callee-saved
+
+  FunctionEmitter.cpp (76 行) ← Emit() 中的接入点（3 处 RA 相关改动）
+  InstructionEmitter.cpp (1018 行) ← 虚拟寄存器发射模式
+    ├─ NextVReg() / GetOrCreateVReg()   虚拟寄存器分配
+    ├─ ReservePhiVRegsForFunction()     phi 节点预分配
+    ├─ EmitIncomingArguments()           $a0-$a3 → $vr* 的参数接收
+    └─ 各 Emit*() 方法的 vreg 模式      enable_reg_alloc 分支
 ```
 
 ---
 
-## 17. 验证方法
+## 8. 验证方法
 
 | 验证项 | 方法 | 预期结果 |
 |-------|------|---------|
 | 编译通过 | `cmake --build build` | 无错误、无警告 |
-| 输出不变 | 开启 `enable_reg_alloc`，对比 `mips.txt` | 与关闭时完全一致（仍不改缓冲区） |
+| MARS 运行正确 | MARS 4.5 运行 `mips.txt`，对比标准输出 | 与关闭 RA 时输出一致 |
 | 干涉图正确 | 小测试用例，对照 stderr 手工验证 | 同时活跃的寄存器之间有边，不同时活跃的无边 |
 | 着色合法 | 检查 stderr 着色结果 | 无两个相邻节点被分配同一颜色 |
-| 无溢出 | 当前全栈分配下 | 只用 `$t0`-`$t2`，远 < K=18，预期 0 spill |
-| JAL clobber | 跨调用场景 | caller-saved 寄存器与跨调用活跃值干涉 |
+| MOVE 消除 | 对比开启/关闭 RA 的 `mips.txt` | 合并成功的 MOVE 指令消失 |
+| Callee-saved 正确 | 跨调用场景，检查 `$s*` 保存/恢复 | 使用的 `$s` 寄存器在 prologue 保存、epilogue 恢复 |
+| 溢出正确 | 高寄存器压力测试用例 | 溢出值通过 `$k0`/`$k1` + `lw`/`sw` 正确中转 |
+| JAL clobber | 跨调用场景 | caller-saved 寄存器与跨调用活跃值干涉，分配到 `$s*` |
 
 ---
 
-## 18. 后续展望
+## 9. 后续展望
 
-Simplify + Select 完成后，算法框架已经就位，但仍运行在全栈分配的指令上（每个值只用 `$t0`-`$t2` 临时寄存器，干涉图很小）。要让寄存器分配真正产生效果，后续步骤按优先级排列：
+当前完整 Chaitin-Briggs 流水线（Build → Simplify → Coalesce → Freeze → Spill → Select → Rewrite）已全部实现，O7 优化收工。以下是理论上可进一步改进的方向，当前均因 ROI 不足而不做：
 
-1. **虚拟寄存器引入**：修改 `InstructionEmitter`，让每个 IR 值使用独立的虚拟寄存器名（如 `%v0`, `%v1`）而非共享 `$t0`-`$t2`。干涉图从几个节点变为几十上百个节点，着色才有意义
-2. **缓冲区重写**：着色完成后，将虚拟寄存器名替换为分配到的物理寄存器名。溢出的虚拟寄存器插入 `lw`/`sw` 代码
-3. **Coalesce + Freeze**：在 Simplify 循环中加入 George 准则的 move 合并和冻结逻辑，消除 `move` 指令
-4. **Restart 循环**：溢出后重新 Build → Simplify → Select，直至无溢出或收敛
-5. **溢出代价优化**：加入 `def_use_count / degree × loop_depth_weight` 启发式，优化溢出选择质量
+1. **预着色度数修正**：`eff_degree` 当前计入了所有邻居（包括非可分配节点），导致 Simplify 过于保守。可以在初始化时只计可分配 + 预着色邻居
+2. **Worklist 优化**：当前 Simplify 每次入栈后 break 重新全扫描（O(V²)）。用 worklist 数据结构可实现 O(V+E)
+3. **Briggs 准则**：当前仅实现 George 准则。Briggs 准则（合并后节点度 < K 的邻居数 < K）在某些情况下更激进，可以合并 George 拒绝的 MOVE
+4. **溢出代价优化**：当前选度数最大者溢出。更精细的启发式考虑 `use_count / degree` 和循环深度权重，优先溢出"使用次数少且度数高"的值
+
+> **关于 Restart 循环**：标准 Chaitin-Briggs 在 actual spill 后会插入溢出代码、重新 Build → 着色，迭代直至无溢出。当前实现用 `$k0`/`$k1` 做一次性溢出中转，跳过了 Restart。K=18 对课程测试集绑绑有余，几乎不会触发 actual spill，`$k0`/`$k1` 方案已足以兜底，故不实现 Restart。
