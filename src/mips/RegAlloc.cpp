@@ -300,8 +300,16 @@ namespace mips {
             case MipsOpcode::J:
             case MipsOpcode::JAL:
             case MipsOpcode::JR:
+                out.push_back(inst);
+                return out;
             case MipsOpcode::BNEZ:
-            case MipsOpcode::BEQZ: out.push_back(inst); return out;
+            case MipsOpcode::BEQZ:
+                // Condition lives in src1 (see AsmWriter::EmitBnez); must rewrite vreg like other uses.
+                scratch = 0;
+                m.src1 = MapRegName(inst.src1, reg_ids, cr, spill_slots, prefix, scratch, true);
+                out.insert(out.end(), prefix.begin(), prefix.end());
+                out.push_back(m);
+                return out;
             case MipsOpcode::LI:
             case MipsOpcode::LA:
                 m.dst = MapDefReg(inst.dst, reg_ids, cr);
@@ -385,6 +393,9 @@ namespace mips {
                         } else if (mips_inst.imm == original_frame_size) {
                             mips_inst.imm += delta;
                         }
+                    } else {
+                        // Alloca / frame-relative address: addiu $reg, $sp, off — bump like lw/sw.
+                        bump_if_sp(mips_inst.src1, mips_inst.imm);
                     }
                     break;
                 default: break;

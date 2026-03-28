@@ -140,6 +140,22 @@ namespace mips {
         return t;
     }
 
+    void InstructionEmitter::ReservePhiVRegsForFunction() {
+        if (!options_.enable_reg_alloc) {
+            return;
+        }
+        for (const auto& blk_ptr : func_.GetBlocks()) {
+            const ir::BasicBlock* blk = blk_ptr.get();
+            for (const auto& inst : blk->GetInstructions()) {
+                auto* phi = dynamic_cast<const ir::PhiInst*>(inst.get());
+                if (phi == nullptr) {
+                    break; // Mem2Reg: phis are contiguous at block head
+                }
+                (void)DefValue(phi);
+            }
+        }
+    }
+
     void InstructionEmitter::EmitIncomingArguments() {
         const size_t kNumArgs = func_.GetArguments().size();
         for (size_t i = 0; i < kNumArgs && i < 4u; ++i) {
@@ -161,6 +177,12 @@ namespace mips {
     void InstructionEmitter::Emit(const ir::Instruction* inst, const ir::BasicBlock* block,
                                   const ir::BasicBlock* next_block) {
         if (options_.enable_reg_alloc) {
+            // Phis are skipped below in the if-chain; reserve their vreg before any use in this
+            // block.
+            if (auto* phi = dynamic_cast<const ir::PhiInst*>(inst)) {
+                (void)DefValue(phi);
+                return;
+            }
             if (auto* bin = dynamic_cast<const ir::BinaryInst*>(inst)) {
                 EmitBinaryInstVReg(bin);
             } else if (auto* ret = dynamic_cast<const ir::ReturnInst*>(inst)) {

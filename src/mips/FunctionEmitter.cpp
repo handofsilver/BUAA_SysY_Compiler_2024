@@ -21,6 +21,9 @@ namespace mips {
             writer_.BeginBuffer();
         }
         EmitPrologue();
+        if (options_.enable_reg_alloc) {
+            inst_emitter_.ReservePhiVRegsForFunction();
+        }
         EmitBody();
         if (options_.enable_reg_alloc) {
             RegAllocator::Run(writer_.GetBuffer(), inst_emitter_.VRegSpillSlots(),

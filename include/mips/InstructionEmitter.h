@@ -53,6 +53,12 @@ namespace mips {
         /// When enable_reg_alloc: move $a0-$a3 (and lw stack args 5+) into vregs.
         void EmitIncomingArguments();
 
+        /// When enable_reg_alloc: allocate a vreg for every phi (block header, Mem2Reg order)
+        /// before any instruction is emitted.  Ensures phi operands on critical edges
+        /// (e.g. for.step → header) resolve via UseValue even when the defining block
+        /// appears later in linear emission order.
+        void ReservePhiVRegsForFunction();
+
         /// Stack slot offset per vreg id for spilled nodes (same as StackFrame slots).
         const std::vector<int>& VRegSpillSlots() const {
             return vreg_spill_slots_;
