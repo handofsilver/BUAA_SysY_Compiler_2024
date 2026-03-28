@@ -152,5 +152,3 @@ htmlcov/
 *.txt
 **/.vscode
 **/.specstory
-**/testcases
-Mars.jar
