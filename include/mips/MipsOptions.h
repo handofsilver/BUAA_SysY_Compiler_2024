@@ -17,6 +17,7 @@ namespace mips {
         bool enable_reg_alloc = false;   // Graph-coloring register allocation
         bool enable_peephole = false;    // Peephole optimization on emitted instructions
         bool enable_mul_div_opt = false; // Strength-reduction for multiply/divide
+        bool enable_block_merge = false; // Redundant-jump elimination (O5)
     };
 
 } // namespace mips

@@ -72,7 +72,8 @@ namespace mips {
     // Public dispatch
     // =========================================================================
 
-    void InstructionEmitter::Emit(const ir::Instruction* inst, const ir::BasicBlock* block) {
+    void InstructionEmitter::Emit(const ir::Instruction* inst, const ir::BasicBlock* block,
+                                  const ir::BasicBlock* next_block) {
         if (auto* bin = dynamic_cast<const ir::BinaryInst*>(inst)) {
             EmitBinaryInst(bin);
         } else if (auto* ret = dynamic_cast<const ir::ReturnInst*>(inst)) {
@@ -88,7 +89,7 @@ namespace mips {
             EmitIcmpInst(icmp);
         } else if (auto* branch = dynamic_cast<const ir::BranchInst*>(inst)) {
             EmitPhiMovesForEdge(block, branch);
-            EmitBranchInst(branch);
+            EmitBranchInst(branch, next_block);
         } else if (auto* zext = dynamic_cast<const ir::ZextInst*>(inst)) {
             EmitZextInst(zext);
         } else if (auto* trunc = dynamic_cast<const ir::TruncInst*>(inst)) {
@@ -316,14 +317,50 @@ namespace mips {
         writer_.EmitSwSp("$t2", frame_.GetOffset(inst));
     }
 
-    void InstructionEmitter::EmitBranchInst(const ir::BranchInst* inst) {
-        if (inst->IsConditional()) {
-            LoadValueToReg(inst->GetCond(), "$t0");
-            writer_.EmitInsn("bnez  $t0, " +
-                             BlockLabel(func_.GetName(), inst->GetIfTrue()->GetName()));
-            writer_.EmitInsn("j     " + BlockLabel(func_.GetName(), inst->GetIfFalse()->GetName()));
+    /**
+     * Emit the MIPS branch / jump sequence for @p inst.
+     *
+     * O5 (enable_block_merge): avoid emitting jump instructions that would
+     * unconditionally transfer control to the very next block in emission
+     * order (@p next_block).  Three patterns are recognised:
+     *
+     *   Unconditional jump (j B):
+     *     If B == next_block → omit the j entirely (fall-through).
+     *
+     *   Conditional branch (bnez $t, T; j F):
+     *     If F == next_block → emit only bnez $t, T   (fall-through to F).
+     *     If T == next_block → invert condition to beqz $t, F (fall-through to T).
+     *
+     * When the optimisation is disabled (or next_block is nullptr) the original
+     * two-instruction sequence is emitted unconditionally.
+     */
+    void InstructionEmitter::EmitBranchInst(const ir::BranchInst* inst,
+                                            const ir::BasicBlock* next_block) {
+        if (!inst->IsConditional()) {
+            const ir::BasicBlock* dest = inst->GetDest();
+            // Unconditional jump: skip if the destination is the next block.
+            if (options_.enable_block_merge && dest == next_block) {
+                return; // fall-through
+            }
+            writer_.EmitInsn("j     " + BlockLabel(func_.GetName(), dest->GetName()));
+            return;
+        }
+
+        // Conditional branch.
+        const ir::BasicBlock* true_bb = inst->GetIfTrue();
+        const ir::BasicBlock* false_bb = inst->GetIfFalse();
+        LoadValueToReg(inst->GetCond(), "$t0");
+
+        if (options_.enable_block_merge && false_bb == next_block) {
+            // False branch falls through; emit only the taken-branch jump.
+            writer_.EmitInsn("bnez  $t0, " + BlockLabel(func_.GetName(), true_bb->GetName()));
+        } else if (options_.enable_block_merge && true_bb == next_block) {
+            // True branch falls through; invert condition so we jump on false.
+            writer_.EmitInsn("beqz  $t0, " + BlockLabel(func_.GetName(), false_bb->GetName()));
         } else {
-            writer_.EmitInsn("j     " + BlockLabel(func_.GetName(), inst->GetDest()->GetName()));
+            // General case: both targets need an explicit jump.
+            writer_.EmitInsn("bnez  $t0, " + BlockLabel(func_.GetName(), true_bb->GetName()));
+            writer_.EmitInsn("j     " + BlockLabel(func_.GetName(), false_bb->GetName()));
         }
     }
 

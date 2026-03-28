@@ -48,10 +48,17 @@ namespace mips {
     // =========================================================================
 
     void FunctionEmitter::EmitBody() {
-        for (const auto& block : func_.GetBlocks()) {
-            writer_.EmitLabel(BlockLabel(func_.GetName(), block->GetName()));
-            for (const auto& inst : block->GetInstructions()) {
-                inst_emitter_.Emit(inst.get(), block.get());
+        const auto& blocks = func_.GetBlocks();
+        for (size_t idx = 0; idx < blocks.size(); ++idx) {
+            const ir::BasicBlock* cur_block = blocks[idx].get();
+            // next_block is used by O5 to detect fall-through opportunities.
+            // It is nullptr for the last block (no successor in emission order).
+            const ir::BasicBlock* next_block =
+                (idx + 1 < blocks.size()) ? blocks[idx + 1].get() : nullptr;
+
+            writer_.EmitLabel(BlockLabel(func_.GetName(), cur_block->GetName()));
+            for (const auto& inst : cur_block->GetInstructions()) {
+                inst_emitter_.Emit(inst.get(), cur_block, next_block);
             }
         }
     }

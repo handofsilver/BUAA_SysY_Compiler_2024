@@ -30,8 +30,12 @@ namespace mips {
                            const MipsOptions& options);
 
         /// Dispatch @p inst to the appropriate EmitXxxInst method.
-        /// @p block is the containing block (needed for phi-move resolution).
-        void Emit(const ir::Instruction* inst, const ir::BasicBlock* block);
+        /// @p block      is the containing block (needed for phi-move resolution).
+        /// @p next_block is the block that immediately follows in emission order,
+        ///               or nullptr if this is the last block.  Used by O5 to
+        ///               determine whether a branch target is a fall-through.
+        void Emit(const ir::Instruction* inst, const ir::BasicBlock* block,
+                  const ir::BasicBlock* next_block = nullptr);
 
         /// Emit stack-based phi-resolution moves for all edges pred→succ
         /// implied by @p branch leaving @p pred_block.
@@ -53,7 +57,8 @@ namespace mips {
         void EmitStoreInst(const ir::StoreInst* inst);
         void EmitGetElementPtrInst(const ir::GetElementPtrInst* inst);
         void EmitIcmpInst(const ir::IcmpInst* inst);
-        void EmitBranchInst(const ir::BranchInst* inst);
+        /// @p next_block  see Emit(); nullptr means no fall-through candidate.
+        void EmitBranchInst(const ir::BranchInst* inst, const ir::BasicBlock* next_block);
         void EmitZextInst(const ir::ZextInst* inst);
         void EmitTruncInst(const ir::TruncInst* inst);
         void EmitReturnInst(const ir::ReturnInst* inst);
