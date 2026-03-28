@@ -165,6 +165,12 @@
 │       ├── MipsCommon.h      # 共享工具与常量
 │       ├── MipsOptions.h     # 编译选项 / 优化开关
 │       └── ValueLocation.h   # Value 位置抽象（栈/寄存器）
+├── scripts/                  # LLVM IR 验证脚本（详见 scripts/README.md）
+│   ├── test_llvm.sh          # 运行本项目编译器生成的 IR 并通过 lli 执行
+│   ├── run_gt_llvm.sh        # 用标准 clang 编译执行，作为 ground truth
+│   ├── run_gt_llvm_mem2reg.sh # 同上，额外运行 mem2reg pass
+│   └── runtime_io.c          # SysY 运行时 IO 函数（getint/putint 等）
+├── Mars.jar                  # MARS 4.5 MIPS 模拟器，用于验证 mips.txt 输出
 └── docs/
     ├── ai_collab_notes/      # AI协作记录
     ├── course_info/          # 实验要求与课程规范
@@ -335,20 +341,20 @@ cmake --build .
 
 ------
 
-## 🧪 自建评测方案 (待完善)
+## 🧪 本地评测方案
 
-> 由于课程官方评测平台已不可用，本项目将建立一套本地化的验证机制以确保重构正确性。
+> 由于课程官方评测平台已不可用，项目采用一套本地自建评测闭环验证正确性。
 
-### 计划方案
+**前端（词法/语法/语义）**：课程前端阶段的输出格式与 Java 版本一致，经人工抽查及与原 Java 输出逐 case 比对，确认无误。
 
-1. **基准对比 (Baseline)**：
-   - 利用原 Java 项目生成标准输出（词法 `output.txt`、语法 `parser.txt`、错误 `error.txt`）。
-   - 编写 Python 脚本 (`diff_test.py`) 自动比对 C++ 版本与 Java 版本的输出差异。
-2. **单元测试**：
-   - 词法：边缘 Case（注释嵌套、跨行字符串、特殊符号粘连等）。
-   - 语法：缺失分号/括号、产生式歧义等用例。
+**后端（代码生成与优化）**：通过配套的 `SysY_Test_2024` 评测框架（本地运行，不随本仓库分发）对全部 37 个用例进行批量验证，所有用例全部通过：
 
-*(注：具体的评测脚本和测试用例集计划在后续 commit 中补充)*
+- **LLVM IR 阶段**：编译器生成 `llvm_ir.txt` → 本机 `clang-20` 链接 `runtime_io.c` 后运行 → 与 `clang-20` 直接编译源文件所得到的标准输出（ground truth）比对。
+- **MIPS 阶段**：编译器生成 `mips.txt` → `java -jar Mars.jar` 运行（MARS 4.5）→ 与上述同一份 ground truth 比对，去除 Mars 版权行后比对。
+
+> **注**：本项目生成的 LLVM IR 以 **LLVM 20 / clang-20** 为标准（与评测环境一致），而非课程原要求的 LLVM 12。两者在指令格式上存在差异，直接用旧版 `lli`/`opt` 解析可能报错。
+
+开发期间，`scripts/` 目录下的 shell 脚本用于对单个 `testfile.txt` 快速验证（见 [`scripts/README.md`](scripts/README.md)）。
 
 ------
 

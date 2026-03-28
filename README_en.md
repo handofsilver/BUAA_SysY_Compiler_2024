@@ -165,6 +165,12 @@ The main pipeline is **Lexer → Parser → SemanticAnalyzer → IRGenVisitor �
 │       ├── MipsCommon.h      # Shared utilities and constants
 │       ├── MipsOptions.h     # Compile options / optimization switches
 │       └── ValueLocation.h   # Value location abstraction (stack/register)
+├── scripts/                  # LLVM IR verification scripts (see scripts/README.md)
+│   ├── test_llvm.sh          # Run this compiler's IR output via lli
+│   ├── run_gt_llvm.sh        # Compile with standard clang as ground truth
+│   ├── run_gt_llvm_mem2reg.sh # Same as above, with an extra mem2reg pass
+│   └── runtime_io.c          # SysY runtime IO functions (getint/putint etc.)
+├── Mars.jar                  # MARS 4.5 MIPS simulator for verifying mips.txt output
 └── docs/
     ├── ai_collab_notes/      # AI collaboration notes
     ├── course_info/          # Experiment requirements and course specs
@@ -333,20 +339,20 @@ Place `testfile.txt` in the executable’s working directory (or set the IDE run
 
 ------
 
-## 🧪 Verification Strategy (Work in Progress)
+## 🧪 Local Verification
 
-> Since the official course evaluation platform is no longer available, this project establishes a localized verification mechanism to ensure refactoring correctness.
+> Since the official course evaluation platform is no longer available, the project uses a self-hosted local evaluation loop to verify correctness.
 
-### Planned Approach
+**Frontend (lexer / parser / semantic)**: Output format matches the original Java implementation. Correctness was confirmed through spot checks and per-case comparison against Java output.
 
-1.  **Baseline Comparison**:
-    - Use the original Java project to generate reference output (lexer `output.txt`, parser `parser.txt`, errors `error.txt`).
-    - Write a Python script (`diff_test.py`) to automatically compare C++ and Java output.
-2.  **Unit Testing**:
-    - Lexer: edge cases (nested comments, multi-line strings, adjacent operators).
-    - Parser: missing semicolons/brackets, production ambiguities.
+**Backend (code generation and optimization)**: All 37 test cases were validated using the `SysY_Test_2024` evaluation framework (run locally; not distributed with this repository). All cases pass:
 
-*(Scripts and test case sets are planned to be added in subsequent commits)*
+- **LLVM IR stage**: compiler emits `llvm_ir.txt` → linked with `runtime_io.c` via `clang-20` and executed → compared against ground truth produced by compiling the source directly with `clang-20`.
+- **MIPS stage**: compiler emits `mips.txt` → executed via `java -jar Mars.jar` (MARS 4.5) → compared against the same ground truth after stripping the Mars copyright header.
+
+> **Note**: The LLVM IR produced by this compiler targets **LLVM 20 / clang-20** (matching the evaluation environment), not the LLVM 12 specified in the original course requirements. The two versions differ in instruction format; parsing with an older `lli`/`opt` will likely fail.
+
+The shell scripts under `scripts/` provide a lightweight single-file quick-check workflow during development (see [`scripts/README.md`](scripts/README.md)).
 
 ------
 
