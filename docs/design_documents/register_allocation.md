@@ -7,11 +7,10 @@
 | 阶段 | 状态 | 内容 |
 |------|------|------|
 | **Build** | ✅ 已实现 | 活跃变量分析 + 干涉图构建 |
-| Simplify | 🔲 待实现 | 低度数节点入栈 |
+| **Simplify + Select** | ✅ 已实现 | 低度数入栈 + 潜在溢出 + 乐观着色 |
 | Coalesce | 🔲 待实现 | George 准则合并 MOVE 对 |
 | Freeze | 🔲 待实现 | 冻结低度数 move-related 节点 |
-| Spill | 🔲 待实现 | 溢出选择 + 代码插入 |
-| Select | 🔲 待实现 | 出栈着色 |
+| Spill rewrite | 🔲 待实现 | 溢出代码插入 + Restart 循环 |
 
 ---
 
@@ -26,7 +25,7 @@ flowchart TD
     MIPS --> EMIT["EmitPrologue() + EmitBody()<br/>（全栈分配：所有值存栈，用 $t0-$t2 临时寄存器）"]
     EMIT --> BUF["vector＜MipsInst＞ 缓冲区<br/>（完整的函数指令流）"]
     BUF --> BUILD["<b>Build 阶段</b><br/>活跃变量分析 + 干涉图构建<br/>（纯分析，不改缓冲区）"]
-    BUILD --> SIMP["Simplify / Coalesce / Freeze / Spill / Select<br/>（图染色 + 指令重写）<br/>TODO"]
+    BUILD --> SIMP["<b>Simplify + Select 阶段</b><br/>低度数入栈 → 潜在溢出 → 乐观着色<br/>（纯分析，不改缓冲区）"]
     SIMP --> PEEP["RunPeephole()（O4 窥孔优化）"]
     PEEP --> SER["Serialize() → mips.txt"]
 ```
@@ -101,8 +100,16 @@ src/mips/LivenessAnalysis.cpp      — 全部实现，按以下顺序阅读：
   ├─ BuildInterferenceGraph()          — 从 def + live-out 构建干涉图
   └─ BuildLiveness()                   — 总入口：串联上述所有步骤
 
-include/mips/RegAlloc.h            — 寄存器分配器入口声明
-src/mips/RegAlloc.cpp              — 当前为 stub：调用 BuildLiveness + 输出调试信息
+include/mips/RegAlloc.h            — 寄存器分配器入口 + ColoringResult 结构体
+  ├─ ColoringResult                 — 着色结果（color_by_node + actual_spills）
+  ├─ SimplifyAndSelect()            — Simplify + potential spill + Select
+  └─ RegAllocator::Run()            — 总入口
+
+src/mips/RegAlloc.cpp              — Simplify + Select 实现 + 调试输出，按以下顺序阅读：
+  ├─ kAllocatableRegNames[]         — 18 色调色板（$t0-$t9, $s0-$s7）
+  ├─ ColoringResult::ColoredAllocatableCount() — 统计着色成功的可分配节点数
+  ├─ SimplifyAndSelect()            — Simplify 循环 + potential spill + Select 着色
+  └─ RegAllocator::Run()            — Build → Simplify+Select → stderr dump
 ```
 
 ### 3.2 Build 的完整流水线
@@ -506,45 +513,302 @@ class InterferenceGraph {
 
 ---
 
-## 10. 调试入口：`RegAllocator::Run()` stub
+## 10. Simplify + Select 阶段概述
 
-当前 `RegAllocator::Run()`（`src/mips/RegAlloc.cpp:16-53`）只做两件事：调用 `BuildLiveness()` 运行完整的 Build 阶段，然后将干涉图信息输出到 stderr：
+Build 阶段产出了干涉图；下一步是**着色**——给每个可分配节点分配一个颜色（物理寄存器），使得相邻节点颜色不同。Simplify + Select 是 Chaitin-Briggs 算法的核心循环：
 
-```cpp
-void RegAllocator::Run(std::vector<MipsInst>& buffer) {
-    LivenessResult result = BuildLiveness(buffer);
-
-    // 输出概览
-    std::cerr << "[RegAlloc] Build complete: " << n << " registers, "
-              << result.blocks.size() << " blocks\n";
-
-    // 输出每个有邻居的节点及其邻接表
-    for (int i = 0; i < n; ++i) {
-        if (ig.Degree(i) == 0) continue;
-        std::cerr << "  " << name << " (deg=" << ig.Degree(i) << ")";
-        if (RegIdMap::IsAllocatable(name)) std::cerr << " [alloc]";
-        std::cerr << ": ...neighbors...\n";
-    }
-
-    // 输出 MOVE 对
-    for (const auto& [dst, src] : ig.GetMoves())
-        std::cerr << "  " << reg_ids.GetName(dst) << " <- " << reg_ids.GetName(src) << "\n";
-}
+```mermaid
+flowchart TD
+    IG["干涉图<br/>(InterferenceGraph + RegIdMap)"]
+    IG --> CLS["节点分类<br/>allocatable vs. pre-colored"]
+    CLS --> SIMP["<b>Simplify</b><br/>度 ＜ K 的节点入栈<br/>邻居度数递减"]
+    SIMP --> STUCK{"所有可分配节点<br/>都入栈了？"}
+    STUCK -- "是" --> SEL["<b>Select</b><br/>从栈顶弹出，逐个着色"]
+    STUCK -- "否（全部 ≥ K）" --> SPILL["<b>Potential Spill</b><br/>选度数最大的节点入栈<br/>（标记为潜在溢出）"]
+    SPILL --> SIMP
+    SEL --> DONE["ColoringResult<br/>{color_by_node, actual_spills}"]
 ```
 
-这个 stub 不修改缓冲区——开启 `enable_reg_alloc` 后，MIPS 输出应与关闭时完全一致，仅 stderr 多出干涉图信息，可用于手工验证。
+当前实现位于 `src/mips/RegAlloc.cpp:39-151`（`SimplifyAndSelect` 函数），仍然是**纯分析**——不修改指令缓冲区，仅输出着色结果到 stderr。
+
+### 10.1 代码导读
+
+```
+include/mips/RegAlloc.h
+  ├─ ColoringResult                 — 着色结果结构体
+  │    ├─ kNumPaletteColors = 18    — K 值（$t0-$t9 + $s0-$s7）
+  │    ├─ color_by_node             — 每个节点的颜色索引（-1 = 未着色）
+  │    ├─ actual_spills             — 实际溢出的节点集合
+  │    └─ ColoredAllocatableCount() — 统计着色成功数
+  ├─ SimplifyAndSelect()            — Simplify + Spill + Select 入口
+  └─ RegAllocator::Run()            — 总流程：Build → Simplify+Select → dump
+
+src/mips/RegAlloc.cpp
+  ├─ kAllocatableRegNames[18]       — 调色板：颜色索引 → 物理寄存器名
+  ├─ SimplifyAndSelect()            — 核心算法（~110 行）
+  │    ├─ 节点分类（allocatable 数组）
+  │    ├─ eff_degree 初始化
+  │    ├─ Simplify 循环（度 < K → 入栈）
+  │    ├─ Potential Spill（度最大者入栈）
+  │    └─ Select（弹栈 → 贪心着色）
+  └─ RegAllocator::Run()            — Build + 干涉图 dump + 着色 + 着色结果 dump
+```
 
 ---
 
-## 11. 文件结构速查
+## 11. 节点分类：可分配 vs. 预着色
+
+干涉图中的节点分为两类，这是整个 Simplify+Select 的前提：
+
+| 类型 | 寄存器 | 算法中的角色 |
+|------|--------|-------------|
+| **可分配** | `$t0`-`$t9`, `$s0`-`$s7` | 需要着色，参与 Simplify/Spill/Select |
+| **预着色** | `$sp`, `$ra`, `$v0`, `$a0`-`$a3` 等 | 颜色固定，**永不入栈**，仅作为邻居约束 |
+
+```cpp
+// src/mips/RegAlloc.cpp:43-46
+std::vector<bool> allocatable(kNumNodes, false);
+for (int i = 0; i < kNumNodes; ++i) {
+    allocatable[i] = RegIdMap::IsAllocatable(reg_ids.GetName(i));
+}
+```
+
+**预着色节点为什么不消耗调色板颜色？** 颜色空间是 `{$t0, $t1, ..., $s7}` 共 18 种。`$sp`、`$ra`、`$v0` 等不在这 18 种之中——它们不是"可用颜色"，所以在 Select 阶段查看邻居颜色时，预着色节点的 `color[nb]` 始终为 -1，自然不会占用任何调色板槽位。
+
+### 11.1 调色板定义
+
+```cpp
+// src/mips/RegAlloc.cpp:21-24
+const char* const kAllocatableRegNames[ColoringResult::kNumPaletteColors] = {
+    "$t0", "$t1", "$t2", "$t3", "$t4", "$t5", "$t6", "$t7", "$t8",
+    "$t9", "$s0", "$s1", "$s2", "$s3", "$s4", "$s5", "$s6", "$s7",
+};
+```
+
+颜色索引 0-9 对应 `$t0`-`$t9`（caller-saved），10-17 对应 `$s0`-`$s7`（callee-saved）。着色完成后，`kAllocatableRegNames[color_by_node[i]]` 就是节点 i 被分配的物理寄存器。
+
+---
+
+## 12. Simplify：低度数节点入栈
+
+### 12.1 核心原理：鸽巢原理
+
+**度数 < K 的节点一定能着色。** 直觉上：即使该节点的所有邻居都被着色且颜色各不相同，最多也只占用了 (度数) < K 种颜色，至少剩余一种颜色可用。
+
+因此可以安全地将度数 < K 的节点从图中"移除"（不实际删除，而是标记 + 度数递减），压入一个栈。移除后，其邻居的度数递减，可能产生新的 < K 节点——形成连锁反应。
+
+### 12.2 有效度数（`eff_degree`）
+
+为了不修改原始 `InterferenceGraph`（后续还需用于 Select 阶段读取邻居），Simplify 阶段维护一份**有效度数的副本**：
+
+```cpp
+// src/mips/RegAlloc.cpp:48-51
+std::vector<int> eff_degree(kNumNodes);
+for (int i = 0; i < kNumNodes; ++i) {
+    eff_degree[i] = ig.Degree(i);
+}
+```
+
+当节点 u 入栈时，对 u 的每个不在栈上的邻居 nb 执行 `--eff_degree[nb]`。这**逻辑等价于从图中移除 u**，但不实际修改邻接表。
+
+### 12.3 Simplify 循环
+
+```cpp
+// src/mips/RegAlloc.cpp:66-84（简化展示）
+bool simplified = true;
+while (simplified) {
+    simplified = false;
+    for (int u = 0; u < kNumNodes; ++u) {
+        if (!allocatable[u] || on_stack[u]) continue;
+        if (eff_degree[u] < K) {
+            select_stack.push(u);
+            on_stack[u] = true;
+            for (int nb : ig.Neighbors(u)) {
+                if (!on_stack[nb]) --eff_degree[nb];    // 邻居度数递减
+            }
+            simplified = true;
+            break;    // 重新从头扫描——递减可能解锁新的 < K 节点
+        }
+    }
+}
+```
+
+**为什么每次入栈后 `break` 重新扫描？** 节点 u 入栈后，其邻居的 `eff_degree` 发生了变化。如果不重新扫描，可能会错过因递减而刚好变为 < K 的邻居。虽然用 worklist 可以实现 O(V+E) 的效率，但当前全栈分配下节点数很少（~10-30），O(V²) 的线性扫描完全可接受。
+
+---
+
+## 13. Potential Spill：溢出候选选择
+
+### 13.1 何时触发？
+
+当 Simplify 无法继续（所有剩余可分配节点的 `eff_degree >= K`），但仍有可分配节点未入栈时，必须选一个节点标记为"潜在溢出"（potential spill），强制入栈以解除僵局。
+
+### 13.2 溢出启发式
+
+当前使用最简单的启发式算法——**选有效度数最大的节点**：
+
+```cpp
+// src/mips/RegAlloc.cpp:92-104
+int victim = -1;
+int best_deg = -1;
+for (int u = 0; u < kNumNodes; ++u) {
+    if (!allocatable[u] || on_stack[u]) continue;
+    int deg = eff_degree[u];
+    if (deg > best_deg) {
+        best_deg = deg;
+        victim = u;
+    }
+}
+```
+
+**为什么选度数最大？** 移除高度数节点能最大程度释放邻居的度数压力，可能让更多邻居变为 < K，重新启动 Simplify 连锁反应。
+
+潜在溢出节点被压入栈后，与正常 Simplify 节点走同一条路径——入栈、邻居递减。区别在于 Select 阶段：正常节点**保证**能着色，而潜在溢出节点可能着色失败。
+
+### 13.3 外层循环：Simplify 与 Spill 交替
+
+```cpp
+// src/mips/RegAlloc.cpp:66-113（整体结构）
+while (any_allocatable_left()) {
+    // 1. 先尽可能 Simplify
+    while (simplified) { ... }
+
+    if (!any_allocatable_left()) break;
+
+    // 2. Simplify 卡住 → 选一个 victim 做 potential spill
+    // 3. victim 入栈，邻居度递减 → 回到步骤 1
+}
+```
+
+这个循环保证**所有可分配节点最终都会入栈**——要么通过 Simplify（度 < K），要么通过 Spill（强制）。
+
+---
+
+## 14. Select：乐观着色
+
+### 14.1 Briggs 的核心创新
+
+Chaitin 的原始算法在 Simplify 阶段就决定溢出——度 >= K 的节点直接标记为溢出。Briggs 改进为**乐观（optimistic）**策略：先把度 >= K 的节点也入栈，到 Select 阶段再看能否着色。
+
+关键洞察：度 >= K 意味着**最坏情况下**邻居占满所有颜色，但实际上邻居之间可能共享颜色。例如一个度=5 的节点在 K=3 的图中，如果其 5 个邻居只使用了 2 种颜色，该节点仍然可以着色成功。
+
+### 14.2 Select 算法
+
+从栈顶逐个弹出节点，尝试分配第一个未被已着色邻居占用的颜色：
+
+```cpp
+// src/mips/RegAlloc.cpp:116-145
+std::vector<int> color(kNumNodes, -1);
+std::unordered_set<int> actual_spills;
+
+while (!select_stack.empty()) {
+    int node = select_stack.top();
+    select_stack.pop();
+
+    // 收集已着色邻居使用的颜色
+    std::vector<bool> used(K, false);
+    for (int nb : ig.Neighbors(node)) {
+        int c = color[nb];
+        if (c >= 0 && c < K) used[c] = true;
+    }
+
+    // 选第一个未被使用的颜色
+    int chosen = -1;
+    for (int c = 0; c < K; ++c) {
+        if (!used[c]) { chosen = c; break; }
+    }
+
+    if (chosen >= 0) {
+        color[node] = chosen;       // 着色成功
+    } else {
+        actual_spills.insert(node);  // 乐观着色失败 → 实际溢出
+    }
+}
+```
+
+**Select 的弹出顺序至关重要。** 栈是后进先出的——Simplify 阶段最后入栈的节点最先弹出。最后入栈的通常是"最容易着色的"（因为是在图最稀疏时被移除的），它们先被着色，为后续弹出的高度数节点提供了已知的颜色信息。
+
+### 14.3 着色结果的数据结构
+
+```cpp
+// include/mips/RegAlloc.h:26-37
+struct ColoringResult {
+    static constexpr int kNumPaletteColors = 18;    // K = 18
+
+    std::vector<int> color_by_node;    // 平行于 RegIdMap 的 ID 空间
+    std::unordered_set<int> actual_spills;
+
+    int ColoredAllocatableCount(const RegIdMap& reg_ids) const;
+};
+```
+
+`color_by_node[i]` 的含义：
+- `-1`：节点 i 是预着色节点（不参与着色），或着色失败（实际溢出）
+- `0`-`17`：着色成功，对应 `kAllocatableRegNames[color]`
+
+### 14.4 预着色节点在 Select 中的表现
+
+预着色节点（`$sp`、`$ra` 等）从未入栈，所以不会被 Select 弹出处理。它们的 `color[nb]` 始终为 -1。当某个可分配节点查看邻居颜色时，预着色邻居的 -1 不会标记 `used` 数组的任何位置——**预着色节点不消耗调色板颜色**。
+
+这在逻辑上是正确的：`$sp` 不是 `$t0`-`$s7` 中的任何一个，它们根本不在同一个颜色空间中，没有冲突。
+
+### 14.5 已知局限：预着色度数膨胀
+
+当前 `eff_degree` 初始化自 `ig.Degree(i)`，它计入了**所有**邻居——包括预着色节点。但预着色节点：
+
+1. 不入栈 → 它们的"移除"永远不会递减邻居度数
+2. 不消耗颜色 → Select 阶段它们不影响着色
+
+这意味着 Simplify 阶段可能过度保守。例如：某节点有 15 个预着色邻居 + 5 个可分配邻居，`eff_degree = 20 >= K = 18`，无法 Simplify，只能作为 potential spill 入栈。但 Select 阶段实际只有 5 个邻居消耗颜色，轻松着色成功。
+
+**Briggs 乐观着色完美兜底了这个问题**——potential spill 并不意味着真的溢出，Select 阶段会发现它可以着色。因此正确性不受影响，只是 Simplify 的效率略低。后续优化可以在度数计算时**只计可分配邻居**。
+
+---
+
+## 15. `RegAllocator::Run()`：完整流程
+
+`Run()`（`src/mips/RegAlloc.cpp:153-207`）串联 Build 和 Simplify+Select，并输出完整的调试信息：
+
+```cpp
+void RegAllocator::Run(std::vector<MipsInst>& buffer) {
+    // 1 Build：活跃分析 + 干涉图
+    LivenessResult result = BuildLiveness(buffer);
+
+    // 2 输出干涉图概览到 stderr（节点、度数、邻接表、move 对）
+    // ...（省略调试输出代码）...
+
+    // 3 Simplify + Select：着色
+    ColoringResult cr = SimplifyAndSelect(result.ig, result.reg_ids);
+
+    // 4 输出着色结果到 stderr
+    std::cerr << "[RegAlloc] Coloring result: " << cr.ColoredAllocatableCount(reg_ids)
+              << " colored, " << cr.actual_spills.size() << " spilled (K=18)\n";
+
+    for (int i = 0; i < kNumRegs; ++i) {
+        if (!RegIdMap::IsAllocatable(reg_ids.GetName(i))) continue;
+        int palette_idx = cr.color_by_node[i];
+        if (cr.actual_spills.count(i))
+            std::cerr << "  " << reg_ids.GetName(i) << " -> (spilled)\n";
+        else if (palette_idx >= 0)
+            std::cerr << "  " << reg_ids.GetName(i) << " -> "
+                      << kAllocatableRegNames[palette_idx] << " (color " << palette_idx << ")\n";
+    }
+}
+```
+
+**当前阶段仍不修改缓冲区**——`mips.txt` 输出与关闭 `enable_reg_alloc` 时完全一致。着色结果仅输出到 stderr，供手工验证。
+
+---
+
+## 16. 文件结构速查
 
 ```
 include/mips/
   LivenessAnalysis.h    ← GetDefs/GetUses + RegIdMap + MipsBlock + InterferenceGraph + BuildLiveness
-  RegAlloc.h            ← RegAllocator::Run() 入口声明
+  RegAlloc.h            ← ColoringResult + SimplifyAndSelect() + RegAllocator::Run()
 
 src/mips/
-  LivenessAnalysis.cpp  ← Build 阶段的完整实现（~350 行）
+  LivenessAnalysis.cpp  ← Build 阶段的完整实现（~620 行）
     ├─ PushIfValid / CallerSavedRegs    辅助函数
     ├─ GetDefs / GetUses                指令级 def/use 提取
     ├─ RegIdMap                         寄存器名 ↔ 整数 ID
@@ -557,18 +821,35 @@ src/mips/
     ├─ InterferenceGraph                邻接集 + 度数 + move 对
     ├─ BuildInterferenceGraph           def × live_out → 干涉边
     └─ BuildLiveness                    总入口：串联六个步骤
-  RegAlloc.cpp          ← 调用 BuildLiveness + stderr debug dump（~50 行）
+  RegAlloc.cpp          ← Simplify + Select + 调试输出（~210 行）
+    ├─ kAllocatableRegNames[18]         调色板定义
+    ├─ ColoringResult::ColoredAllocatableCount()
+    ├─ SimplifyAndSelect()              核心着色算法
+    └─ RegAllocator::Run()              Build → 着色 → dump
   FunctionEmitter.cpp   ← Emit() 中的 RegAllocator::Run() 接入（3 行改动）
 ```
 
 ---
 
-## 12. 验证方法
+## 17. 验证方法
 
 | 验证项 | 方法 | 预期结果 |
 |-------|------|---------|
 | 编译通过 | `cmake --build build` | 无错误、无警告 |
-| 输出不变 | 开启 `enable_reg_alloc`，对比 `mips.txt` | 与关闭时完全一致（Build 不改缓冲区） |
-| 干涉图正确 | 小测试用例，对照 stderr 输出手工验证 | 同时活跃的寄存器之间有边，不同时活跃的无边 |
-| MOVE 对记录 | 检查 stderr 的 Moves 部分 | 每条 `move` 指令对应一条记录 |
-| JAL clobber | 跨调用场景 | 调用前后活跃的寄存器与所有 caller-saved 寄存器有干涉边 |
+| 输出不变 | 开启 `enable_reg_alloc`，对比 `mips.txt` | 与关闭时完全一致（仍不改缓冲区） |
+| 干涉图正确 | 小测试用例，对照 stderr 手工验证 | 同时活跃的寄存器之间有边，不同时活跃的无边 |
+| 着色合法 | 检查 stderr 着色结果 | 无两个相邻节点被分配同一颜色 |
+| 无溢出 | 当前全栈分配下 | 只用 `$t0`-`$t2`，远 < K=18，预期 0 spill |
+| JAL clobber | 跨调用场景 | caller-saved 寄存器与跨调用活跃值干涉 |
+
+---
+
+## 18. 后续展望
+
+Simplify + Select 完成后，算法框架已经就位，但仍运行在全栈分配的指令上（每个值只用 `$t0`-`$t2` 临时寄存器，干涉图很小）。要让寄存器分配真正产生效果，后续步骤按优先级排列：
+
+1. **虚拟寄存器引入**：修改 `InstructionEmitter`，让每个 IR 值使用独立的虚拟寄存器名（如 `%v0`, `%v1`）而非共享 `$t0`-`$t2`。干涉图从几个节点变为几十上百个节点，着色才有意义
+2. **缓冲区重写**：着色完成后，将虚拟寄存器名替换为分配到的物理寄存器名。溢出的虚拟寄存器插入 `lw`/`sw` 代码
+3. **Coalesce + Freeze**：在 Simplify 循环中加入 George 准则的 move 合并和冻结逻辑，消除 `move` 指令
+4. **Restart 循环**：溢出后重新 Build → Simplify → Select，直至无溢出或收敛
+5. **溢出代价优化**：加入 `def_use_count / degree × loop_depth_weight` 启发式，优化溢出选择质量
