@@ -111,25 +111,22 @@ namespace mips {
             LoadValueToReg(inst->GetLhs(), "$t0");
             LoadValueToReg(inst->GetRhs(), "$t1");
             switch (inst->GetOp()) {
-                case ir::BinaryOp::ADD: writer_.EmitInsn("addu  $t2, $t0, $t1"); break;
-                case ir::BinaryOp::SUB: writer_.EmitInsn("subu  $t2, $t0, $t1"); break;
-                case ir::BinaryOp::MUL: writer_.EmitInsn("mul   $t2, $t0, $t1"); break;
+                case ir::BinaryOp::ADD: writer_.EmitAddu("$t2", "$t0", "$t1"); break;
+                case ir::BinaryOp::SUB: writer_.EmitSubu("$t2", "$t0", "$t1"); break;
+                case ir::BinaryOp::MUL: writer_.EmitMul("$t2", "$t0", "$t1"); break;
                 case ir::BinaryOp::DIV:
-                    writer_.EmitInsn("div   $t0, $t1");
-                    writer_.EmitInsn("mflo  $t2");
+                    writer_.EmitDiv("$t0", "$t1");
+                    writer_.EmitMflo("$t2");
                     break;
                 case ir::BinaryOp::REM:
-                    writer_.EmitInsn("div   $t0, $t1");
-                    writer_.EmitInsn("mfhi  $t2");
+                    writer_.EmitDiv("$t0", "$t1");
+                    writer_.EmitMfhi("$t2");
                     break;
                 default: assert(false && "Unknown binary op");
             }
         };
 
         // O3 (conservative): mul/div strength reduction only.
-        // - No magic-number division.
-        // - No rem optimization.
-        // - Fall back to generic path whenever pattern is not confidently matched.
         if (!options_.enable_mul_div_opt) {
             emit_generic();
             writer_.EmitSwSp("$t2", frame_.GetOffset(inst));
@@ -169,7 +166,7 @@ namespace mips {
                 }
                 if (const_side == -1) {
                     LoadValueToReg(var_side, "$t0");
-                    writer_.EmitInsn("subu  $t2, $zero, $t0");
+                    writer_.EmitSubu("$t2", "$zero", "$t0");
                     writer_.EmitSwSp("$t2", frame_.GetOffset(inst));
                     return;
                 }
@@ -180,9 +177,9 @@ namespace mips {
                 // 2) x * (2^n) => sll
                 if (IsPositivePowerOfTwo(abs_c, sh) && sh <= 31) {
                     LoadValueToReg(var_side, "$t0");
-                    writer_.EmitInsn("sll   $t2, $t0, " + std::to_string(sh));
+                    writer_.EmitSll("$t2", "$t0", sh);
                     if (neg) {
-                        writer_.EmitInsn("subu  $t2, $zero, $t2");
+                        writer_.EmitSubu("$t2", "$zero", "$t2");
                     }
                     writer_.EmitSwSp("$t2", frame_.GetOffset(inst));
                     return;
@@ -191,10 +188,10 @@ namespace mips {
                 // 3) x * (2^n + 1) => (x << n) + x
                 if (abs_c > 1 && IsPositivePowerOfTwo(abs_c - 1, sh) && sh <= 31) {
                     LoadValueToReg(var_side, "$t0");
-                    writer_.EmitInsn("sll   $t2, $t0, " + std::to_string(sh));
-                    writer_.EmitInsn("addu  $t2, $t2, $t0");
+                    writer_.EmitSll("$t2", "$t0", sh);
+                    writer_.EmitAddu("$t2", "$t2", "$t0");
                     if (neg) {
-                        writer_.EmitInsn("subu  $t2, $zero, $t2");
+                        writer_.EmitSubu("$t2", "$zero", "$t2");
                     }
                     writer_.EmitSwSp("$t2", frame_.GetOffset(inst));
                     return;
@@ -203,10 +200,10 @@ namespace mips {
                 // 4) x * (2^n - 1) => (x << n) - x
                 if (IsPositivePowerOfTwo(abs_c + 1, sh) && sh <= 31) {
                     LoadValueToReg(var_side, "$t0");
-                    writer_.EmitInsn("sll   $t2, $t0, " + std::to_string(sh));
-                    writer_.EmitInsn("subu  $t2, $t2, $t0");
+                    writer_.EmitSll("$t2", "$t0", sh);
+                    writer_.EmitSubu("$t2", "$t2", "$t0");
                     if (neg) {
-                        writer_.EmitInsn("subu  $t2, $zero, $t2");
+                        writer_.EmitSubu("$t2", "$zero", "$t2");
                     }
                     writer_.EmitSwSp("$t2", frame_.GetOffset(inst));
                     return;
@@ -230,7 +227,7 @@ namespace mips {
                     }
                     if (rhs_c == -1) {
                         LoadValueToReg(inst->GetLhs(), "$t0");
-                        writer_.EmitInsn("subu  $t2, $zero, $t0");
+                        writer_.EmitSubu("$t2", "$zero", "$t0");
                         writer_.EmitSwSp("$t2", frame_.GetOffset(inst));
                         return;
                     }
@@ -243,12 +240,12 @@ namespace mips {
                         LoadValueToReg(inst->GetLhs(), "$t0");
                         // Signed trunc-toward-zero division by 2^n:
                         // q = (x + ((x >> 31) >>> (32 - n))) >> n
-                        writer_.EmitInsn("sra   $t2, $t0, 31");
-                        writer_.EmitInsn("srl   $t2, $t2, " + std::to_string(32 - sh));
-                        writer_.EmitInsn("addu  $t2, $t0, $t2");
-                        writer_.EmitInsn("sra   $t2, $t2, " + std::to_string(sh));
+                        writer_.EmitSra("$t2", "$t0", 31);
+                        writer_.EmitSrl("$t2", "$t2", 32 - sh);
+                        writer_.EmitAddu("$t2", "$t0", "$t2");
+                        writer_.EmitSra("$t2", "$t2", sh);
                         if (neg) {
-                            writer_.EmitInsn("subu  $t2, $zero, $t2");
+                            writer_.EmitSubu("$t2", "$zero", "$t2");
                         }
                         writer_.EmitSwSp("$t2", frame_.GetOffset(inst));
                         return;
@@ -267,9 +264,9 @@ namespace mips {
         LoadValueToReg(inst->GetPointerOperand(), "$t0");
         auto* int_ty = dynamic_cast<const ir::IntegerType*>(inst->GetType());
         if (int_ty && int_ty->GetBits() == 8) {
-            writer_.EmitInsn("lbu   $t0, 0($t0)"); // i8: zero-extend byte to 32-bit
+            writer_.EmitLbu("$t0", 0, "$t0"); // i8: zero-extend byte to 32-bit
         } else {
-            writer_.EmitInsn("lw    $t0, 0($t0)");
+            writer_.EmitLw("$t0", 0, "$t0");
         }
         writer_.EmitSwSp("$t0", frame_.GetOffset(inst));
     }
@@ -279,9 +276,9 @@ namespace mips {
         LoadValueToReg(inst->GetPointerOperand(), "$t1");
         auto* int_ty = dynamic_cast<const ir::IntegerType*>(inst->GetValueOperand()->GetType());
         if (int_ty && int_ty->GetBits() == 8) {
-            writer_.EmitInsn("sb    $t0, 0($t1)"); // i8: store low byte only
+            writer_.EmitSb("$t0", 0, "$t1"); // i8: store low byte only
         } else {
-            writer_.EmitInsn("sw    $t0, 0($t1)");
+            writer_.EmitSw("$t0", 0, "$t1");
         }
     }
 
@@ -294,11 +291,11 @@ namespace mips {
         LoadValueToReg(elem_index, "$t1");
         int elem_size = GepElementSizeBytes(inst);
         if (elem_size == 4) {
-            writer_.EmitInsn("sll   $t2, $t1, 2");
-            writer_.EmitInsn("addu  $t2, $t0, $t2");
+            writer_.EmitSll("$t2", "$t1", 2);
+            writer_.EmitAddu("$t2", "$t0", "$t2");
         } else {
             // i8 elements: offset = index * 1, add directly.
-            writer_.EmitInsn("addu  $t2, $t0, $t1");
+            writer_.EmitAddu("$t2", "$t0", "$t1");
         }
         writer_.EmitSwSp("$t2", frame_.GetOffset(inst));
     }
@@ -307,12 +304,12 @@ namespace mips {
         LoadValueToReg(inst->GetLhs(), "$t0");
         LoadValueToReg(inst->GetRhs(), "$t1");
         switch (inst->GetPredicate()) {
-            case ir::IcmpPred::SLT: writer_.EmitInsn("slt   $t2, $t0, $t1"); break;
-            case ir::IcmpPred::SGT: writer_.EmitInsn("sgt   $t2, $t0, $t1"); break;
-            case ir::IcmpPred::SLE: writer_.EmitInsn("sle   $t2, $t0, $t1"); break;
-            case ir::IcmpPred::SGE: writer_.EmitInsn("sge   $t2, $t0, $t1"); break;
-            case ir::IcmpPred::EQ: writer_.EmitInsn("seq   $t2, $t0, $t1"); break;
-            case ir::IcmpPred::NE: writer_.EmitInsn("sne   $t2, $t0, $t1"); break;
+            case ir::IcmpPred::SLT: writer_.EmitSlt("$t2", "$t0", "$t1"); break;
+            case ir::IcmpPred::SGT: writer_.EmitSgt("$t2", "$t0", "$t1"); break;
+            case ir::IcmpPred::SLE: writer_.EmitSle("$t2", "$t0", "$t1"); break;
+            case ir::IcmpPred::SGE: writer_.EmitSge("$t2", "$t0", "$t1"); break;
+            case ir::IcmpPred::EQ: writer_.EmitSeq("$t2", "$t0", "$t1"); break;
+            case ir::IcmpPred::NE: writer_.EmitSne("$t2", "$t0", "$t1"); break;
         }
         writer_.EmitSwSp("$t2", frame_.GetOffset(inst));
     }
@@ -342,7 +339,7 @@ namespace mips {
             if (options_.enable_block_merge && dest == next_block) {
                 return; // fall-through
             }
-            writer_.EmitInsn("j     " + BlockLabel(func_.GetName(), dest->GetName()));
+            writer_.EmitJ(BlockLabel(func_.GetName(), dest->GetName()));
             return;
         }
 
@@ -353,14 +350,14 @@ namespace mips {
 
         if (options_.enable_block_merge && false_bb == next_block) {
             // False branch falls through; emit only the taken-branch jump.
-            writer_.EmitInsn("bnez  $t0, " + BlockLabel(func_.GetName(), true_bb->GetName()));
+            writer_.EmitBnez("$t0", BlockLabel(func_.GetName(), true_bb->GetName()));
         } else if (options_.enable_block_merge && true_bb == next_block) {
             // True branch falls through; invert condition so we jump on false.
-            writer_.EmitInsn("beqz  $t0, " + BlockLabel(func_.GetName(), false_bb->GetName()));
+            writer_.EmitBeqz("$t0", BlockLabel(func_.GetName(), false_bb->GetName()));
         } else {
             // General case: both targets need an explicit jump.
-            writer_.EmitInsn("bnez  $t0, " + BlockLabel(func_.GetName(), true_bb->GetName()));
-            writer_.EmitInsn("j     " + BlockLabel(func_.GetName(), false_bb->GetName()));
+            writer_.EmitBnez("$t0", BlockLabel(func_.GetName(), true_bb->GetName()));
+            writer_.EmitJ(BlockLabel(func_.GetName(), false_bb->GetName()));
         }
     }
 
@@ -371,7 +368,7 @@ namespace mips {
 
     void InstructionEmitter::EmitTruncInst(const ir::TruncInst* inst) {
         LoadValueToReg(inst->GetOperandValue(), "$t0");
-        writer_.EmitInsn("andi  $t0, $t0, 0xFF"); // i32 -> i8: keep low 8 bits
+        writer_.EmitAndi("$t0", "$t0", 0xFF); // i32 -> i8: keep low 8 bits
         writer_.EmitSwSp("$t0", frame_.GetOffset(inst));
     }
 
@@ -384,7 +381,7 @@ namespace mips {
     void InstructionEmitter::EmitEpilogue() {
         writer_.EmitLwSp("$ra", 0);
         writer_.EmitAddiu("$sp", "$sp", frame_.GetFrameSize());
-        writer_.EmitInsn("jr    $ra");
+        writer_.EmitJr("$ra");
     }
 
     // =========================================================================
@@ -425,7 +422,7 @@ namespace mips {
             writer_.EmitAddiu("$sp", "$sp", -kExtraSize);
         }
 
-        writer_.EmitInsn("jal   " + name);
+        writer_.EmitJal(name);
 
         if (kExtraSize > 0) {
             writer_.EmitAddiu("$sp", "$sp", kExtraSize);

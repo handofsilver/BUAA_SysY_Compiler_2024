@@ -34,7 +34,7 @@ namespace mips {
     void FunctionEmitter::EmitPrologue() {
         writer_.EmitLabel(func_.GetName());
         writer_.EmitAddiu("$sp", "$sp", -frame_.GetFrameSize());
-        writer_.EmitInsn("sw    $ra, 0($sp)");
+        writer_.EmitSwSp("$ra", 0);
 
         // Spill register-passed arguments ($a0-$a3) into their stack slots.
         const size_t kNumArgs = func_.GetArguments().size();

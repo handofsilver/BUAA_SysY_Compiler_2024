@@ -114,7 +114,7 @@ namespace mips {
     void MipsEmitter::EmitTextSegment() {
         writer_.EmitDirective(".text");
         writer_.EmitLabel("__start");
-        writer_.EmitInsn("jal   main");
+        writer_.EmitJal("main");
         writer_.EmitLi("$v0", 10);
         writer_.EmitSyscall();
         writer_.EmitBlankLine();

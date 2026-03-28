@@ -6,15 +6,21 @@
  * across emitters.  This single choke-point enables:
  *   - Consistent indentation and formatting.
  *   - Buffered / peephole mode (O4 optimization):
- *       BeginBuffer()  — start collecting lines for one function.
- *       FlushBuffer()  — run peephole rules on the collected lines, then
- *                        write the result to the output stream.
- *     Between the two calls, every EmitXxx method (including EmitLabel) routes
- *     through the buffer so that the output order is preserved.
- *     Labels act as natural peephole barriers: patterns are only applied to
- *     pairs of consecutively buffered instruction lines.
+ *       BeginBuffer()  — start collecting MipsInst for one function.
+ *       FlushBuffer()  — run peephole rules on the collected instructions,
+ *                        then serialize and write the result to the output.
+ *     Between the two calls, every EmitXxx method routes through the buffer
+ *     so that the output order is preserved.
+ *     Labels act as natural peephole barriers (IsInsn() == false).
+ *
+ * Step 1 of O7 (register allocation) refactored the internal buffer from
+ * vector<string> to vector<MipsInst>.  All typed EmitXxx methods construct
+ * a MipsInst; the peephole pass matches on structured fields instead of
+ * parsing strings; serialization to text happens in Serialize().
  */
 #pragma once
+
+#include "mips/MipsInst.h"
 
 #include <cstdint>
 #include <ostream>
@@ -57,79 +63,134 @@ namespace mips {
         void EmitSpace(int bytes);
 
         // -----------------------------------------------------------------
-        // Instruction-level emission
+        // Instruction-level emission (typed — preferred for .text segment)
         // -----------------------------------------------------------------
 
-        /// Emit a raw instruction string with standard indentation.
-        /// @p text should NOT include leading whitespace or trailing newline.
-        void EmitInsn(const std::string& text);
+        // ── R-type: dst = src1 op src2 ──────────────────────────────────
 
-        /// Convenience: emit "li <reg>, <imm>\n".
-        void EmitLi(const std::string& reg, int64_t imm);
+        void EmitAddu(const std::string& dst, const std::string& src1, const std::string& src2);
+        void EmitSubu(const std::string& dst, const std::string& src1, const std::string& src2);
+        void EmitMul(const std::string& dst, const std::string& src1, const std::string& src2);
+        void EmitAnd(const std::string& dst, const std::string& src1, const std::string& src2);
+        void EmitOr(const std::string& dst, const std::string& src1, const std::string& src2);
+        void EmitSlt(const std::string& dst, const std::string& src1, const std::string& src2);
+        void EmitSgt(const std::string& dst, const std::string& src1, const std::string& src2);
+        void EmitSle(const std::string& dst, const std::string& src1, const std::string& src2);
+        void EmitSge(const std::string& dst, const std::string& src1, const std::string& src2);
+        void EmitSeq(const std::string& dst, const std::string& src1, const std::string& src2);
+        void EmitSne(const std::string& dst, const std::string& src1, const std::string& src2);
 
-        /// Convenience: emit "la <reg>, <label>\n".
-        void EmitLa(const std::string& reg, const std::string& label);
+        // ── Shift: dst = src op shamt ───────────────────────────────────
 
-        /// Convenience: emit "move <dst>, <src>\n".
-        void EmitMove(const std::string& dst, const std::string& src);
+        void EmitSll(const std::string& dst, const std::string& src, int shamt);
+        void EmitSrl(const std::string& dst, const std::string& src, int shamt);
+        void EmitSra(const std::string& dst, const std::string& src, int shamt);
 
-        /// Convenience: emit "sw <reg>, <offset>($sp)\n".
-        void EmitSwSp(const std::string& reg, int offset);
+        // ── Division: HI:LO = src1 / src2 ──────────────────────────────
+
+        void EmitDiv(const std::string& src1, const std::string& src2);
+        void EmitMflo(const std::string& dst);
+        void EmitMfhi(const std::string& dst);
+
+        // ── I-type arithmetic ───────────────────────────────────────────
+
+        /// Emit "addiu <dst>, <src>, <imm>\n".
+        void EmitAddiu(const std::string& dst, const std::string& src, int imm);
+
+        /// Emit "andi <dst>, <src>, <imm>\n".
+        void EmitAndi(const std::string& dst, const std::string& src, int64_t imm);
+
+        // ── Memory (general base register) ──────────────────────────────
+
+        void EmitLw(const std::string& dst, int offset, const std::string& base);
+        void EmitSw(const std::string& src, int offset, const std::string& base);
+        void EmitLbu(const std::string& dst, int offset, const std::string& base);
+        void EmitSb(const std::string& src, int offset, const std::string& base);
+
+        // ── Memory ($sp-relative convenience wrappers) ──────────────────
 
         /// Convenience: emit "lw <reg>, <offset>($sp)\n".
         void EmitLwSp(const std::string& reg, int offset);
 
-        /// Convenience: emit "addiu <dst>, <src>, <imm>\n".
-        void EmitAddiu(const std::string& dst, const std::string& src, int imm);
+        /// Convenience: emit "sw <reg>, <offset>($sp)\n".
+        void EmitSwSp(const std::string& reg, int offset);
+
+        // ── Pseudo-load ─────────────────────────────────────────────────
+
+        /// Emit "li <reg>, <imm>\n".
+        void EmitLi(const std::string& reg, int64_t imm);
+
+        /// Emit "la <reg>, <label>\n".
+        void EmitLa(const std::string& reg, const std::string& label);
+
+        // ── Control flow ────────────────────────────────────────────────
+
+        void EmitJ(const std::string& label);
+        void EmitJal(const std::string& label);
+        void EmitJr(const std::string& reg);
+        void EmitBnez(const std::string& reg, const std::string& label);
+        void EmitBeqz(const std::string& reg, const std::string& label);
+
+        // ── Register copy ───────────────────────────────────────────────
+
+        /// Emit "move <dst>, <src>\n".
+        void EmitMove(const std::string& dst, const std::string& src);
+
+        // ── System ──────────────────────────────────────────────────────
 
         /// Emit "syscall\n".
         void EmitSyscall();
 
         // -----------------------------------------------------------------
+        // Raw / pre-formatted emission (for .data segment and edge cases)
+        // -----------------------------------------------------------------
+
+        /// Emit a raw instruction string with standard indentation.
+        /// Creates a RAW MipsInst — use typed methods above whenever possible.
+        void EmitInsn(const std::string& text);
+
+        // -----------------------------------------------------------------
         // Peephole buffer (O4 optimization)
         // -----------------------------------------------------------------
 
-        /// Start buffering all subsequent lines (instructions + labels) for one
-        /// function.  Must be paired with exactly one FlushBuffer() call.
-        /// Precondition: not already buffering.
+        /// Start buffering all subsequent MipsInst for one function.
+        /// Must be paired with exactly one FlushBuffer() call.
         void BeginBuffer();
 
-        /// Apply peephole optimization rules to the buffered lines, then write
-        /// the optimized sequence to os_ and reset the buffer.
-        /// Precondition: BeginBuffer() was called before this.
+        /// Apply peephole optimization rules to the buffered instructions,
+        /// then serialize and write the optimized sequence to os_.
         void FlushBuffer();
+
+        // -----------------------------------------------------------------
+        // Structured buffer access (for future register allocation passes)
+        // -----------------------------------------------------------------
+
+        /// Direct read access to the instruction buffer (valid between
+        /// BeginBuffer and FlushBuffer).
+        const std::vector<MipsInst>& GetBuffer() const {
+            return buf_;
+        }
+
+        /// Mutable access — allows register allocation to rewrite instructions.
+        std::vector<MipsInst>& GetBuffer() {
+            return buf_;
+        }
 
     private:
         std::ostream& os_;
 
         // ── Peephole buffer ───────────────────────────────────────────────
-        // Invariant: buffering_ == true  iff  buf_ is being accumulated.
-        // Lines are stored without their trailing '\n'; it is added at flush.
         bool buffering_ = false;
-        std::vector<std::string> buf_;
+        std::vector<MipsInst> buf_;
 
-        /// Route @p line to buf_ (when buffering) or directly to os_ + '\n'.
-        void RawLine(std::string line);
+        /// Route @p inst to buf_ (when buffering) or directly serialize to os_.
+        void Route(MipsInst inst);
+
+        /// Convert a MipsInst to its text representation.
+        static std::string Serialize(const MipsInst& inst);
 
         /// Apply peephole rules on buf_ until no further reduction is possible.
         void RunPeephole();
-
-        // ── Peephole pattern parsers ──────────────────────────────────────
-        // All return false if @p line does not match the expected format.
-        // Formats are fixed by the Emit* methods above, so matching is exact.
-
-        /// True iff @p line is an instruction line (starts with kIndent).
-        /// Label lines and blank lines are treated as peephole barriers.
-        static bool IsInsnLine(const std::string& line);
-
-        /// Parse "    sw    $REG, OFFSET($sp)" → out_reg, out_off.
-        static bool ParseSwSp(const std::string& line, std::string& out_reg, int& out_off);
-
-        /// Parse "    lw    $REG, OFFSET($sp)" → out_reg, out_off.
-        static bool ParseLwSp(const std::string& line, std::string& out_reg, int& out_off);
-
-        /// Parse "    move  $DST, $SRC" → out_dst, out_src.
-        static bool ParseMove(const std::string& line, std::string& out_dst, std::string& out_src);
     };
 
 } // namespace mips
