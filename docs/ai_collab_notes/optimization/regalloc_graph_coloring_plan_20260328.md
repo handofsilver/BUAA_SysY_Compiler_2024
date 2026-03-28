@@ -129,6 +129,8 @@ $$
 \text{out}[B] = \bigcup_{S \in \text{succ}(B)} \text{in}[S]
 $$
 
+其中 **use[B]** 为块内**向上暴露的** use（gen），**def[B]** 为块内**所有** def 的并集（kill），二者**不对称**——不可把 def[B] 理解成「定义前未被 use」之类与 use[B] 对偶的集合。
+
 逆后序（reverse postorder）迭代，通常 3–5 轮收敛。
 
 ### 4.2 指令级活跃变量

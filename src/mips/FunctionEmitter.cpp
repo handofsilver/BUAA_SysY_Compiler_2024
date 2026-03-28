@@ -1,5 +1,6 @@
 #include "mips/FunctionEmitter.h"
 #include "mips/MipsCommon.h"
+#include "mips/RegAlloc.h"
 
 namespace mips {
 
@@ -13,16 +14,18 @@ namespace mips {
 
     void FunctionEmitter::Emit() {
         frame_.Build();
-        // Open a per-function buffer so that RunPeephole() can optimise the
-        // complete instruction stream (prologue + body) as a single unit.
-        // Labels inside the buffer act as natural barriers (IsInsnLine = false),
-        // so no pattern ever fires across a block boundary.
-        if (options_.enable_peephole) {
+        // Buffer mode is needed by both peephole (O4) and register allocation
+        // (O7).  Enable it if either optimization is active.
+        const bool kUseBuffer = options_.enable_peephole || options_.enable_reg_alloc;
+        if (kUseBuffer) {
             writer_.BeginBuffer();
         }
         EmitPrologue();
         EmitBody();
-        if (options_.enable_peephole) {
+        if (options_.enable_reg_alloc) {
+            RegAllocator::Run(writer_.GetBuffer());
+        }
+        if (kUseBuffer) {
             writer_.FlushBuffer();
         }
     }
