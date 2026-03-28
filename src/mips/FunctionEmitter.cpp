@@ -23,7 +23,8 @@ namespace mips {
         EmitPrologue();
         EmitBody();
         if (options_.enable_reg_alloc) {
-            RegAllocator::Run(writer_.GetBuffer());
+            RegAllocator::Run(writer_.GetBuffer(), inst_emitter_.VRegSpillSlots(),
+                              frame_.GetFrameSize());
         }
         if (kUseBuffer) {
             writer_.FlushBuffer();
@@ -39,10 +40,13 @@ namespace mips {
         writer_.EmitAddiu("$sp", "$sp", -frame_.GetFrameSize());
         writer_.EmitSwSp("$ra", 0);
 
-        // Spill register-passed arguments ($a0-$a3) into their stack slots.
         const size_t kNumArgs = func_.GetArguments().size();
-        for (size_t i = 0; i < kNumArgs && i < 4u; ++i) {
-            writer_.EmitSwSp("$a" + std::to_string(i), frame_.GetOffset(func_.GetArgument(i)));
+        if (options_.enable_reg_alloc) {
+            inst_emitter_.EmitIncomingArguments();
+        } else {
+            for (size_t i = 0; i < kNumArgs && i < 4u; ++i) {
+                writer_.EmitSwSp("$a" + std::to_string(i), frame_.GetOffset(func_.GetArgument(i)));
+            }
         }
     }
 

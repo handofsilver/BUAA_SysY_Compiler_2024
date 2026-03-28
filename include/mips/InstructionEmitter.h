@@ -21,6 +21,10 @@
 #include "mips/MipsOptions.h"
 #include "mips/StackFrame.h"
 
+#include <string>
+#include <unordered_map>
+#include <vector>
+
 namespace mips {
 
     class InstructionEmitter {
@@ -46,11 +50,29 @@ namespace mips {
         /// general stack slots (lw).  nullptr is treated as undef → li reg, 0.
         void LoadValueToReg(const ir::Value* val, const std::string& reg);
 
+        /// When enable_reg_alloc: move $a0-$a3 (and lw stack args 5+) into vregs.
+        void EmitIncomingArguments();
+
+        /// Stack slot offset per vreg id for spilled nodes (same as StackFrame slots).
+        const std::vector<int>& VRegSpillSlots() const {
+            return vreg_spill_slots_;
+        }
+
     private:
         AsmWriter& writer_;
         const StackFrame& frame_;
         const ir::Function& func_;
         const MipsOptions& options_;
+
+        // --- Virtual registers (enable_reg_alloc only) ---
+        int next_vreg_id_ = 0;
+        std::unordered_map<const ir::Value*, std::string> value_to_vreg_;
+        std::vector<int> vreg_spill_slots_;
+
+        std::string AllocVReg();
+        std::string EnsureVRegForValue(const ir::Value* val);
+        std::string DefValue(const ir::Instruction* inst);
+        std::string UseValue(const ir::Value* val);
 
         void EmitBinaryInst(const ir::BinaryInst* inst);
         void EmitLoadInst(const ir::LoadInst* inst);
@@ -64,6 +86,18 @@ namespace mips {
         void EmitReturnInst(const ir::ReturnInst* inst);
         void EmitCallInst(const ir::CallInst* inst);
         void EmitLibraryCall(const ir::CallInst* inst);
+
+        void EmitBinaryInstVReg(const ir::BinaryInst* inst);
+        void EmitLoadInstVReg(const ir::LoadInst* inst);
+        void EmitStoreInstVReg(const ir::StoreInst* inst);
+        void EmitGetElementPtrInstVReg(const ir::GetElementPtrInst* inst);
+        void EmitIcmpInstVReg(const ir::IcmpInst* inst);
+        void EmitBranchInstVReg(const ir::BranchInst* inst, const ir::BasicBlock* next_block);
+        void EmitZextInstVReg(const ir::ZextInst* inst);
+        void EmitTruncInstVReg(const ir::TruncInst* inst);
+        void EmitReturnInstVReg(const ir::ReturnInst* inst);
+        void EmitCallInstVReg(const ir::CallInst* inst);
+        void EmitLibraryCallVReg(const ir::CallInst* inst);
 
         /// Epilogue sequence emitted inline before each ret.
         void EmitEpilogue();

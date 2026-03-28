@@ -5,6 +5,7 @@
 #include "mips/MipsCommon.h"
 #include <algorithm>
 #include <cassert>
+#include <sstream>
 #include <vector>
 
 namespace mips {
@@ -69,11 +70,123 @@ namespace mips {
     options_(options) {}
 
     // =========================================================================
+    // Virtual register helpers (O7 register allocation)
+    // =========================================================================
+
+    std::string InstructionEmitter::AllocVReg() {
+        std::ostringstream oss;
+        oss << "$vr" << next_vreg_id_;
+        ++next_vreg_id_;
+        vreg_spill_slots_.push_back(-1);
+        return oss.str();
+    }
+
+    std::string InstructionEmitter::EnsureVRegForValue(const ir::Value* val) {
+        auto it = value_to_vreg_.find(val);
+        if (it != value_to_vreg_.end()) {
+            return it->second;
+        }
+        std::string vr = AllocVReg();
+        value_to_vreg_[val] = vr;
+        if (frame_.HasSlot(val)) {
+            const int kId = next_vreg_id_ - 1;
+            vreg_spill_slots_[static_cast<size_t>(kId)] = frame_.GetOffset(val);
+        }
+        return vr;
+    }
+
+    std::string InstructionEmitter::DefValue(const ir::Instruction* inst) {
+        auto it = value_to_vreg_.find(inst);
+        if (it != value_to_vreg_.end()) {
+            return it->second;
+        }
+        std::string vr = AllocVReg();
+        value_to_vreg_[inst] = vr;
+        if (frame_.HasSlot(inst)) {
+            const int kId = next_vreg_id_ - 1;
+            vreg_spill_slots_[static_cast<size_t>(kId)] = frame_.GetOffset(inst);
+        }
+        return vr;
+    }
+
+    std::string InstructionEmitter::UseValue(const ir::Value* val) {
+        if (val == nullptr) {
+            std::string t = AllocVReg();
+            writer_.EmitLi(t, 0);
+            return t;
+        }
+        if (auto* ci = dynamic_cast<const ir::ConstantInt*>(val)) {
+            std::string t = AllocVReg();
+            writer_.EmitLi(t, ci->GetValue());
+            return t;
+        }
+        if (auto* gv = dynamic_cast<const ir::GlobalVar*>(val)) {
+            std::string t = AllocVReg();
+            writer_.EmitLa(t, GlobalLabel(gv->GetName()));
+            return t;
+        }
+        if (auto* alloca = dynamic_cast<const ir::AllocaInst*>(val)) {
+            std::string t = AllocVReg();
+            writer_.EmitAddiu(t, "$sp", frame_.GetOffset(alloca));
+            return t;
+        }
+        auto it = value_to_vreg_.find(val);
+        if (it != value_to_vreg_.end()) {
+            return it->second;
+        }
+        assert(frame_.HasSlot(val) && "SSA value without vreg must have stack slot");
+        std::string t = AllocVReg();
+        writer_.EmitLwSp(t, frame_.GetOffset(val));
+        return t;
+    }
+
+    void InstructionEmitter::EmitIncomingArguments() {
+        const size_t kNumArgs = func_.GetArguments().size();
+        for (size_t i = 0; i < kNumArgs && i < 4u; ++i) {
+            const ir::Value* a = func_.GetArgument(i);
+            std::string vr = EnsureVRegForValue(a);
+            writer_.EmitMove(vr, "$a" + std::to_string(i));
+        }
+        for (size_t i = 4; i < kNumArgs; ++i) {
+            const ir::Value* a = func_.GetArgument(i);
+            std::string vr = EnsureVRegForValue(a);
+            writer_.EmitLw(vr, frame_.GetOffset(a), "$sp");
+        }
+    }
+
+    // =========================================================================
     // Public dispatch
     // =========================================================================
 
     void InstructionEmitter::Emit(const ir::Instruction* inst, const ir::BasicBlock* block,
                                   const ir::BasicBlock* next_block) {
+        if (options_.enable_reg_alloc) {
+            if (auto* bin = dynamic_cast<const ir::BinaryInst*>(inst)) {
+                EmitBinaryInstVReg(bin);
+            } else if (auto* ret = dynamic_cast<const ir::ReturnInst*>(inst)) {
+                EmitReturnInstVReg(ret);
+                EmitEpilogue();
+            } else if (auto* load = dynamic_cast<const ir::LoadInst*>(inst)) {
+                EmitLoadInstVReg(load);
+            } else if (auto* store = dynamic_cast<const ir::StoreInst*>(inst)) {
+                EmitStoreInstVReg(store);
+            } else if (auto* gep = dynamic_cast<const ir::GetElementPtrInst*>(inst)) {
+                EmitGetElementPtrInstVReg(gep);
+            } else if (auto* icmp = dynamic_cast<const ir::IcmpInst*>(inst)) {
+                EmitIcmpInstVReg(icmp);
+            } else if (auto* branch = dynamic_cast<const ir::BranchInst*>(inst)) {
+                EmitPhiMovesForEdge(block, branch);
+                EmitBranchInstVReg(branch, next_block);
+            } else if (auto* zext = dynamic_cast<const ir::ZextInst*>(inst)) {
+                EmitZextInstVReg(zext);
+            } else if (auto* trunc = dynamic_cast<const ir::TruncInst*>(inst)) {
+                EmitTruncInstVReg(trunc);
+            } else if (auto* call = dynamic_cast<const ir::CallInst*>(inst)) {
+                EmitCallInstVReg(call);
+            }
+            return;
+        }
+
         if (auto* bin = dynamic_cast<const ir::BinaryInst*>(inst)) {
             EmitBinaryInst(bin);
         } else if (auto* ret = dynamic_cast<const ir::ReturnInst*>(inst)) {
@@ -510,6 +623,8 @@ namespace mips {
             successors.push_back(branch->GetDest());
         }
 
+        const bool kVreg = options_.enable_reg_alloc;
+
         for (const ir::BasicBlock* succ : successors) {
             // Collect (phi, incoming_value) pairs for the pred->succ edge.
             std::vector<std::pair<const ir::PhiInst*, const ir::Value*>> edge_phis;
@@ -571,9 +686,310 @@ namespace mips {
             }
 
             for (const auto& [phi, incoming] : sorted) {
-                LoadValueToReg(incoming, "$t0");
-                writer_.EmitSwSp("$t0", frame_.GetOffset(phi));
+                if (kVreg) {
+                    const std::string kDst = DefValue(phi);
+                    const std::string kSrc = UseValue(incoming);
+                    if (kDst != kSrc) {
+                        writer_.EmitMove(kDst, kSrc);
+                    }
+                } else {
+                    LoadValueToReg(incoming, "$t0");
+                    writer_.EmitSwSp("$t0", frame_.GetOffset(phi));
+                }
             }
+        }
+    }
+
+    // =========================================================================
+    // Virtual-register instruction emission (register allocation input)
+    // =========================================================================
+
+    void InstructionEmitter::EmitBinaryInstVReg(const ir::BinaryInst* inst) {
+        auto emit_generic = [&]() {
+            const std::string kLhs = UseValue(inst->GetLhs());
+            const std::string kRhs = UseValue(inst->GetRhs());
+            const std::string kDst = DefValue(inst);
+            switch (inst->GetOp()) {
+                case ir::BinaryOp::ADD: writer_.EmitAddu(kDst, kLhs, kRhs); break;
+                case ir::BinaryOp::SUB: writer_.EmitSubu(kDst, kLhs, kRhs); break;
+                case ir::BinaryOp::MUL: writer_.EmitMul(kDst, kLhs, kRhs); break;
+                case ir::BinaryOp::DIV:
+                    writer_.EmitDiv(kLhs, kRhs);
+                    writer_.EmitMflo(kDst);
+                    break;
+                case ir::BinaryOp::REM:
+                    writer_.EmitDiv(kLhs, kRhs);
+                    writer_.EmitMfhi(kDst);
+                    break;
+                default: assert(false && "Unknown binary op");
+            }
+        };
+
+        if (!options_.enable_mul_div_opt) {
+            emit_generic();
+            return;
+        }
+
+        if (inst->GetOp() == ir::BinaryOp::MUL) {
+            int64_t lhs_c = 0;
+            int64_t rhs_c = 0;
+            const bool kLhsIsC = TryGetConstInt(inst->GetLhs(), lhs_c);
+            const bool kRhsIsC = TryGetConstInt(inst->GetRhs(), rhs_c);
+            const ir::Value* var_side = nullptr;
+            int64_t const_side = 0;
+            if (kLhsIsC && !kRhsIsC) {
+                var_side = inst->GetRhs();
+                const_side = lhs_c;
+            } else if (!kLhsIsC && kRhsIsC) {
+                var_side = inst->GetLhs();
+                const_side = rhs_c;
+            }
+
+            if (var_side != nullptr) {
+                const std::string kDst = DefValue(inst);
+                if (const_side == 0) {
+                    writer_.EmitLi(kDst, 0);
+                    return;
+                }
+                if (const_side == 1) {
+                    const std::string kV = UseValue(var_side);
+                    if (kV != kDst) {
+                        writer_.EmitMove(kDst, kV);
+                    }
+                    return;
+                }
+                if (const_side == -1) {
+                    const std::string kV = UseValue(var_side);
+                    writer_.EmitSubu(kDst, "$zero", kV);
+                    return;
+                }
+                bool neg = (const_side < 0);
+                const uint64_t kAbsC =
+                    static_cast<uint64_t>(neg ? -(const_side + 1) + 1 : const_side);
+                int sh = 0;
+                if (IsPositivePowerOfTwo(kAbsC, sh) && sh <= 31) {
+                    const std::string kV = UseValue(var_side);
+                    writer_.EmitSll(kDst, kV, sh);
+                    if (neg) {
+                        writer_.EmitSubu(kDst, "$zero", kDst);
+                    }
+                    return;
+                }
+                if (kAbsC > 1 && IsPositivePowerOfTwo(kAbsC - 1, sh) && sh <= 31) {
+                    const std::string kV = UseValue(var_side);
+                    writer_.EmitSll(kDst, kV, sh);
+                    writer_.EmitAddu(kDst, kDst, kV);
+                    if (neg) {
+                        writer_.EmitSubu(kDst, "$zero", kDst);
+                    }
+                    return;
+                }
+                if (IsPositivePowerOfTwo(kAbsC + 1, sh) && sh <= 31) {
+                    const std::string kV = UseValue(var_side);
+                    writer_.EmitSll(kDst, kV, sh);
+                    writer_.EmitSubu(kDst, kDst, kV);
+                    if (neg) {
+                        writer_.EmitSubu(kDst, "$zero", kDst);
+                    }
+                    return;
+                }
+            }
+        }
+
+        if (inst->GetOp() == ir::BinaryOp::DIV) {
+            int64_t rhs_c = 0;
+            if (TryGetConstInt(inst->GetRhs(), rhs_c) && rhs_c != 0) {
+                const std::string kDst = DefValue(inst);
+                if (rhs_c == 1) {
+                    const std::string kV = UseValue(inst->GetLhs());
+                    if (kV != kDst) {
+                        writer_.EmitMove(kDst, kV);
+                    }
+                    return;
+                }
+                if (rhs_c == -1) {
+                    const std::string kV = UseValue(inst->GetLhs());
+                    writer_.EmitSubu(kDst, "$zero", kV);
+                    return;
+                }
+                bool neg = (rhs_c < 0);
+                const uint64_t kAbsD = static_cast<uint64_t>(neg ? -(rhs_c + 1) + 1 : rhs_c);
+                int sh = 0;
+                if (IsPositivePowerOfTwo(kAbsD, sh) && sh >= 1 && sh <= 31) {
+                    const std::string kV = UseValue(inst->GetLhs());
+                    writer_.EmitSra(kDst, kV, 31);
+                    writer_.EmitSrl(kDst, kDst, 32 - sh);
+                    writer_.EmitAddu(kDst, kV, kDst);
+                    writer_.EmitSra(kDst, kDst, sh);
+                    if (neg) {
+                        writer_.EmitSubu(kDst, "$zero", kDst);
+                    }
+                    return;
+                }
+            }
+        }
+
+        emit_generic();
+    }
+
+    void InstructionEmitter::EmitLoadInstVReg(const ir::LoadInst* inst) {
+        const std::string kPtr = UseValue(inst->GetPointerOperand());
+        const std::string kDst = DefValue(inst);
+        auto* int_ty = dynamic_cast<const ir::IntegerType*>(inst->GetType());
+        if (int_ty && int_ty->GetBits() == 8) {
+            writer_.EmitLbu(kDst, 0, kPtr);
+        } else {
+            writer_.EmitLw(kDst, 0, kPtr);
+        }
+    }
+
+    void InstructionEmitter::EmitStoreInstVReg(const ir::StoreInst* inst) {
+        const std::string kVal = UseValue(inst->GetValueOperand());
+        const std::string kPtr = UseValue(inst->GetPointerOperand());
+        auto* int_ty = dynamic_cast<const ir::IntegerType*>(inst->GetValueOperand()->GetType());
+        if (int_ty && int_ty->GetBits() == 8) {
+            writer_.EmitSb(kVal, 0, kPtr);
+        } else {
+            writer_.EmitSw(kVal, 0, kPtr);
+        }
+    }
+
+    void InstructionEmitter::EmitGetElementPtrInstVReg(const ir::GetElementPtrInst* inst) {
+        const std::string kBase = UseValue(inst->GetPointerOperand());
+        const ir::Value* elem_index =
+            inst->GetIndex(1) != nullptr ? inst->GetIndex(1) : inst->GetIndex(0);
+        const std::string kIdx = UseValue(elem_index);
+        const std::string kDst = DefValue(inst);
+        const int kElemSize = GepElementSizeBytes(inst);
+        if (kElemSize == 4) {
+            writer_.EmitSll(kDst, kIdx, 2);
+            writer_.EmitAddu(kDst, kBase, kDst);
+        } else {
+            writer_.EmitAddu(kDst, kBase, kIdx);
+        }
+    }
+
+    void InstructionEmitter::EmitIcmpInstVReg(const ir::IcmpInst* inst) {
+        const std::string kLhs = UseValue(inst->GetLhs());
+        const std::string kRhs = UseValue(inst->GetRhs());
+        const std::string kDst = DefValue(inst);
+        switch (inst->GetPredicate()) {
+            case ir::IcmpPred::SLT: writer_.EmitSlt(kDst, kLhs, kRhs); break;
+            case ir::IcmpPred::SGT: writer_.EmitSgt(kDst, kLhs, kRhs); break;
+            case ir::IcmpPred::SLE: writer_.EmitSle(kDst, kLhs, kRhs); break;
+            case ir::IcmpPred::SGE: writer_.EmitSge(kDst, kLhs, kRhs); break;
+            case ir::IcmpPred::EQ: writer_.EmitSeq(kDst, kLhs, kRhs); break;
+            case ir::IcmpPred::NE: writer_.EmitSne(kDst, kLhs, kRhs); break;
+        }
+    }
+
+    void InstructionEmitter::EmitBranchInstVReg(const ir::BranchInst* inst,
+                                                const ir::BasicBlock* next_block) {
+        if (!inst->IsConditional()) {
+            const ir::BasicBlock* dest = inst->GetDest();
+            if (options_.enable_block_merge && dest == next_block) {
+                return;
+            }
+            writer_.EmitJ(BlockLabel(func_.GetName(), dest->GetName()));
+            return;
+        }
+        const ir::BasicBlock* true_bb = inst->GetIfTrue();
+        const ir::BasicBlock* false_bb = inst->GetIfFalse();
+        const std::string kCond = UseValue(inst->GetCond());
+        if (options_.enable_block_merge && false_bb == next_block) {
+            writer_.EmitBnez(kCond, BlockLabel(func_.GetName(), true_bb->GetName()));
+        } else if (options_.enable_block_merge && true_bb == next_block) {
+            writer_.EmitBeqz(kCond, BlockLabel(func_.GetName(), false_bb->GetName()));
+        } else {
+            writer_.EmitBnez(kCond, BlockLabel(func_.GetName(), true_bb->GetName()));
+            writer_.EmitJ(BlockLabel(func_.GetName(), false_bb->GetName()));
+        }
+    }
+
+    void InstructionEmitter::EmitZextInstVReg(const ir::ZextInst* inst) {
+        const std::string kDst = DefValue(inst);
+        const std::string kSrc = UseValue(inst->GetOperandValue());
+        if (kDst != kSrc) {
+            writer_.EmitMove(kDst, kSrc);
+        }
+    }
+
+    void InstructionEmitter::EmitTruncInstVReg(const ir::TruncInst* inst) {
+        const std::string kDst = DefValue(inst);
+        const std::string kSrc = UseValue(inst->GetOperandValue());
+        writer_.EmitAndi(kDst, kSrc, 0xFF);
+    }
+
+    void InstructionEmitter::EmitReturnInstVReg(const ir::ReturnInst* inst) {
+        if (auto* ret_val = inst->GetRetVal()) {
+            writer_.EmitMove("$v0", UseValue(ret_val));
+        }
+    }
+
+    void InstructionEmitter::EmitCallInstVReg(const ir::CallInst* inst) {
+        const std::string& name = inst->GetCallee()->GetName();
+        if (IsLibraryFunction(name)) {
+            EmitLibraryCallVReg(inst);
+            return;
+        }
+
+        const size_t kNumArgs = inst->GetNumArgs();
+        const size_t kExtraArgs = (kNumArgs > 4u) ? (kNumArgs - 4u) : 0u;
+        const int kExtraSize = static_cast<int>(kExtraArgs * 4);
+
+        if (kExtraSize > 0) {
+            for (size_t i = 4; i < kNumArgs; ++i) {
+                const std::string kVr = UseValue(inst->GetArg(static_cast<int>(i)));
+                writer_.EmitSwSp(kVr, -kExtraSize + static_cast<int>((i - 4) * 4));
+            }
+        }
+        for (size_t i = 0; i < kNumArgs && i < 4u; ++i) {
+            writer_.EmitMove("$a" + std::to_string(i), UseValue(inst->GetArg(static_cast<int>(i))));
+        }
+        if (kExtraSize > 0) {
+            writer_.EmitAddiu("$sp", "$sp", -kExtraSize);
+        }
+
+        writer_.EmitJal(name);
+
+        if (kExtraSize > 0) {
+            writer_.EmitAddiu("$sp", "$sp", kExtraSize);
+        }
+
+        if (!dynamic_cast<const ir::VoidType*>(inst->GetType())) {
+            if (frame_.HasSlot(inst)) {
+                const std::string kDst = DefValue(inst);
+                writer_.EmitMove(kDst, "$v0");
+            }
+        }
+    }
+
+    void InstructionEmitter::EmitLibraryCallVReg(const ir::CallInst* inst) {
+        const std::string& name = inst->GetCallee()->GetName();
+        if (name == "getint") {
+            writer_.EmitLi("$v0", 5);
+            writer_.EmitSyscall();
+            const std::string kDst = DefValue(inst);
+            writer_.EmitMove(kDst, "$v0");
+        } else if (name == "getchar") {
+            writer_.EmitLi("$v0", 12);
+            writer_.EmitSyscall();
+            const std::string kDst = DefValue(inst);
+            writer_.EmitMove(kDst, "$v0");
+            writer_.EmitLi("$v0", 12);
+            writer_.EmitSyscall();
+        } else if (name == "putint") {
+            writer_.EmitMove("$a0", UseValue(inst->GetArg(0)));
+            writer_.EmitLi("$v0", 1);
+            writer_.EmitSyscall();
+        } else if (name == "putch") {
+            writer_.EmitMove("$a0", UseValue(inst->GetArg(0)));
+            writer_.EmitLi("$v0", 11);
+            writer_.EmitSyscall();
+        } else if (name == "putstr") {
+            writer_.EmitMove("$a0", UseValue(inst->GetArg(0)));
+            writer_.EmitLi("$v0", 4);
+            writer_.EmitSyscall();
         }
     }
 

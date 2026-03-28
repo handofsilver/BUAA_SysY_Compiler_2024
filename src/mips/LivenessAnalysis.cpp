@@ -206,25 +206,45 @@ namespace mips {
         return name_to_id_.at(name);
     }
 
+    int RegIdMap::TryGet(const std::string& name) const {
+        auto it = name_to_id_.find(name);
+        return it == name_to_id_.end() ? -1 : it->second;
+    }
+
     const std::string& RegIdMap::GetName(int id) const {
         return id_to_name_.at(id);
     }
 
-    bool RegIdMap::IsAllocatable(const std::string& name) {
-        // $t0-$t9, $s0-$s7
-        if (name.size() < 3 || name[0] != '$') {
+    bool RegIdMap::IsVirtual(const std::string& name) {
+        // "$vr" + decimal digits
+        if (name.size() < 4 || name[0] != '$' || name[1] != 'v' || name[2] != 'r') {
             return false;
         }
+        for (size_t i = 3; i < name.size(); ++i) {
+            if (name[i] < '0' || name[i] > '9') {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    int RegIdMap::PaletteIndexOf(const std::string& name) {
+        if (name.size() != 3 || name[0] != '$') {
+            return -1;
+        }
         char kind = name[1];
-        if (kind == 't') {
-            // $t0-$t9
-            return name.size() == 3 && name[2] >= '0' && name[2] <= '9';
+        char d = name[2];
+        if (kind == 't' && d >= '0' && d <= '9') {
+            return d - '0';
         }
-        if (kind == 's') {
-            // $s0-$s7
-            return name.size() == 3 && name[2] >= '0' && name[2] <= '7';
+        if (kind == 's' && d >= '0' && d <= '7') {
+            return 10 + (d - '0');
         }
-        return false;
+        return -1;
+    }
+
+    bool RegIdMap::IsAllocatable(const std::string& name) {
+        return IsVirtual(name) || PaletteIndexOf(name) >= 0;
     }
 
     // =====================================================================

@@ -46,9 +46,13 @@ namespace mips {
         /// Run register allocation on the buffered instruction stream.
         /// Called between EmitBody() and FlushBuffer() in FunctionEmitter.
         ///
-        /// Runs Build + Simplify/Select and dumps debug info to stderr.
-        /// Does not rewrite the instruction buffer yet.
-        static void Run(std::vector<MipsInst>& buffer);
+        /// Build + Simplify/Select + rewrite vregs to physical registers.
+        /// @param vreg_spill_slots i-th entry is stack offset for @c $vr<i> (-1 if unused).
+        /// @param original_frame_size Stack frame size from @c StackFrame::GetFrameSize() before RA
+        ///        (matches prologue @c addiu $sp,-F and epilogue @c addiu $sp,+F).  Used so callee-saved
+        ///        adjustment does not touch call-site @c addiu $sp,±kExtraArgArea.
+        static void Run(std::vector<MipsInst>& buffer, const std::vector<int>& vreg_spill_slots,
+                        int original_frame_size);
     };
 
 } // namespace mips

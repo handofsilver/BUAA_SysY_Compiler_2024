@@ -43,6 +43,9 @@ namespace mips {
         /// Look up the ID for a name that is known to exist.
         int Get(const std::string& name) const;
 
+        /// @return id if present, otherwise -1.
+        int TryGet(const std::string& name) const;
+
         /// Reverse map: ID -> name.
         const std::string& GetName(int id) const;
 
@@ -51,8 +54,14 @@ namespace mips {
             return static_cast<int>(id_to_name_.size());
         }
 
-        /// True if @p name is an allocatable register ($t0-$t9, $s0-$s7).
+        /// True if @p name participates in graph coloring ($vr*, $t0-$t9, $s0-$s7).
         static bool IsAllocatable(const std::string& name);
+
+        /// True for virtual registers emitted before RA rewrite (prefix "$vr").
+        static bool IsVirtual(const std::string& name);
+
+        /// Palette index 0..17 for fixed $t0-$t9 / $s0-$s7; -1 for virtual regs and others.
+        static int PaletteIndexOf(const std::string& name);
 
     private:
         std::unordered_map<std::string, int> name_to_id_;

@@ -53,6 +53,7 @@ int main() {
         const bool kEnableMulDivOpt = true;     /* MIPS optimization(Mul/Div strength reduction) */
         const bool kEnablePeephole = true;      /* MIPS optimization(Peephole: sw/lw elim, etc.) */
         const bool kEnableBlockMerge = true;    /* MIPS optimization(redundant-jump elimination) */
+        const bool kEnableRegAlloc = true;      /* MIPS optimization (graph-coloring RA + vregs) */
         const bool kEmitMIPSOutput = true;      /* target code(MIPS): mips.txt */
         const bool kRenumberSSAForPrint = true; /* false = use original IR names (debug) */
 
@@ -119,7 +120,7 @@ int main() {
                 mips_opts.enable_mul_div_opt = kEnableMulDivOpt;
                 mips_opts.enable_peephole = kEnablePeephole;
                 mips_opts.enable_block_merge = kEnableBlockMerge;
-                // mips_opts.enable_reg_alloc = kEnableRegAlloc;  // TODO: wire up
+                mips_opts.enable_reg_alloc = kEnableRegAlloc;
                 mips::MipsEmitter emitter(mips_out, *result.module, mips_opts);
                 emitter.Emit();
             }
