@@ -9,6 +9,8 @@
 #include <cctype>
 #include <cstdint>
 #include <iostream>
+#include <list>
+#include <numeric>
 #include <set>
 #include <stack>
 #include <unordered_set>
@@ -73,125 +75,383 @@ namespace mips {
         return n;
     }
 
-    ColoringResult SimplifyAndSelect(const InterferenceGraph& ig, const RegIdMap& reg_ids) {
-        const int kNumNodes = reg_ids.Size();
-        assert(kNumNodes == ig.NumNodes());
+    /// Full Chaitin-Briggs coloring: Simplify → Coalesce (George criterion) → Freeze →
+    /// Spill (optimistic) → Select.  Replaces the simpler SimplifyAndSelect.
+    ///
+    /// Key invariants maintained throughout:
+    ///   - adj_work[u]: working adjacency; extended when nodes are merged via Coalesce.
+    ///   - eff_degree[u]: count of active (not on_stack, not coalesced) neighbors of u.
+    ///   - alias[u]: union-find representative (path-halving compression).
+    ///   - pending_moves: moves not yet resolved; entries are erased when coalesced,
+    ///     constrained, frozen, or otherwise invalidated.
+    ColoringResult ColorWithCoalesce(const InterferenceGraph& ig, const RegIdMap& reg_ids) {
+        const int kN = reg_ids.Size();
+        const int kK = ColoringResult::kNumPaletteColors;
+        assert(kN == ig.NumNodes());
 
-        std::vector<int> color(static_cast<size_t>(kNumNodes), -1);
-        std::vector<bool> precolored(static_cast<size_t>(kNumNodes), false);
-        for (int i = 0; i < kNumNodes; ++i) {
-            const int kPaletteIndex = RegIdMap::PaletteIndexOf(reg_ids.GetName(i));
-            if (kPaletteIndex >= 0) {
-                color[static_cast<size_t>(i)] = kPaletteIndex;
+        // ── Pre-color physical registers ($t0-$t9: indices 0–9, $s0-$s7: 10–17) ─────
+        std::vector<int> color(static_cast<size_t>(kN), -1);
+        std::vector<bool> precolored(static_cast<size_t>(kN), false);
+        for (int i = 0; i < kN; ++i) {
+            const int kPal = RegIdMap::PaletteIndexOf(reg_ids.GetName(i));
+            if (kPal >= 0) {
+                color[static_cast<size_t>(i)] = kPal;
                 precolored[static_cast<size_t>(i)] = true;
             }
         }
 
-        std::vector<bool> need_simplify(static_cast<size_t>(kNumNodes), false);
-        for (int i = 0; i < kNumNodes; ++i) {
-            need_simplify[static_cast<size_t>(i)] =
-                RegIdMap::IsAllocatable(reg_ids.GetName(i)) && !precolored[static_cast<size_t>(i)];
-        }
-
-        std::vector<int> eff_degree(static_cast<size_t>(kNumNodes));
-        for (int i = 0; i < kNumNodes; ++i) {
-            eff_degree[static_cast<size_t>(i)] = ig.Degree(i);
-        }
-
-        std::vector<bool> on_stack(static_cast<size_t>(kNumNodes), false);
-        std::stack<int> select_stack;
-
-        auto any_left = [&]() {
-            for (int i = 0; i < kNumNodes; ++i) {
-                if (need_simplify[static_cast<size_t>(i)] && !on_stack[static_cast<size_t>(i)]) {
-                    return true;
-                }
-            }
-            return false;
+        // Candidate = allocatable virtual register ($vr*) that needs a color assigned.
+        // Physical registers are either precolored ($t/$s) or non-candidates ($v0, $sp…).
+        auto is_cand = [&](int u) -> bool {
+            return !precolored[static_cast<size_t>(u)] &&
+                   RegIdMap::IsAllocatable(reg_ids.GetName(u));
         };
 
-        while (any_left()) {
-            bool simplified = true;
-            while (simplified) {
-                simplified = false;
-                for (int u = 0; u < kNumNodes; ++u) {
-                    if (!need_simplify[static_cast<size_t>(u)] ||
-                        on_stack[static_cast<size_t>(u)]) {
-                        continue;
+        // ── Mutable working graph ─────────────────────────────────────────────────────
+        std::vector<std::unordered_set<int>> adj_work(static_cast<size_t>(kN));
+        std::vector<int> eff_degree(static_cast<size_t>(kN), 0);
+        for (int u = 0; u < kN; ++u) {
+            adj_work[static_cast<size_t>(u)] = ig.Neighbors(u);
+            eff_degree[static_cast<size_t>(u)] = ig.Degree(u);
+        }
+
+        std::vector<bool> on_stack(static_cast<size_t>(kN), false);
+        std::vector<bool> coalesced_flag(static_cast<size_t>(kN), false);
+        std::vector<int> alias(static_cast<size_t>(kN));
+        std::iota(alias.begin(), alias.end(), 0); // alias[i] = i initially
+        std::stack<int> sel_stack;
+
+        // Pending moves: not yet coalesced, constrained, or frozen.
+        // Entries are erased as they become resolved.
+        std::list<std::pair<int, int>> pending_moves(ig.GetMoves().begin(), ig.GetMoves().end());
+
+        // ── Lambdas ───────────────────────────────────────────────────────────────────
+
+        // Union-find with path halving: follows alias chain to its root.
+        auto get_alias = [&](int u) -> int {
+            while (alias[static_cast<size_t>(u)] != u) {
+                // Skip one level per step (path halving).
+                alias[static_cast<size_t>(u)] =
+                    alias[static_cast<size_t>(alias[static_cast<size_t>(u)])];
+                u = alias[static_cast<size_t>(u)];
+            }
+            return u;
+        };
+
+        // Active (non-stacked, non-coalesced) neighbors of u, alias-resolved and
+        // deduplicated.  Deduplication is necessary because adj_work may contain stale
+        // raw IDs that now share the same representative after prior Coalesce steps.
+        auto active_adj = [&](int u) -> std::vector<int> {
+            std::unordered_set<int> seen;
+            std::vector<int> result;
+            for (int t_raw : adj_work[static_cast<size_t>(u)]) {
+                const int kT = get_alias(t_raw);
+                if (kT != u && !on_stack[static_cast<size_t>(kT)] &&
+                    !coalesced_flag[static_cast<size_t>(kT)] && seen.insert(kT).second) {
+                    result.push_back(kT);
+                }
+            }
+            return result;
+        };
+
+        // Set of candidate nodes that appear in at least one pending move.
+        // Recomputed fresh each time to avoid stale move-related state.
+        auto move_related_set = [&]() -> std::unordered_set<int> {
+            std::unordered_set<int> mr;
+            for (const auto& mv : pending_moves) {
+                for (int raw : {mv.first, mv.second}) {
+                    const int kA = get_alias(raw);
+                    if (is_cand(kA) && !on_stack[static_cast<size_t>(kA)] &&
+                        !coalesced_flag[static_cast<size_t>(kA)]) {
+                        mr.insert(kA);
                     }
-                    if (eff_degree[static_cast<size_t>(u)] < ColoringResult::kNumPaletteColors) {
-                        select_stack.push(u);
-                        on_stack[static_cast<size_t>(u)] = true;
-                        for (int nb : ig.Neighbors(u)) {
-                            if (need_simplify[static_cast<size_t>(nb)] &&
-                                !on_stack[static_cast<size_t>(nb)]) {
-                                --eff_degree[static_cast<size_t>(nb)];
-                            }
-                        }
-                        simplified = true;
+                }
+            }
+            return mr;
+        };
+
+        // Decrement eff_degree of active candidate node m (it lost one active neighbor).
+        auto decrement_degree = [&](int m) {
+            const int kM = get_alias(m);
+            if (!is_cand(kM) || on_stack[static_cast<size_t>(kM)] ||
+                coalesced_flag[static_cast<size_t>(kM)]) {
+                return;
+            }
+            --eff_degree[static_cast<size_t>(kM)];
+        };
+
+        // George OK(t, u): safe to add edge (t, u) without harming colorability.
+        // True if t has low degree, t is precolored, or t already interferes with u.
+        auto george_ok = [&](int t, int u) -> bool {
+            const int kT = get_alias(t);
+            return eff_degree[static_cast<size_t>(kT)] < kK ||
+                   precolored[static_cast<size_t>(kT)] ||
+                   adj_work[static_cast<size_t>(u)].count(kT) > 0;
+        };
+
+        // George criterion: all active neighbors of v satisfy george_ok(·, u).
+        // If true, merging v into u is safe (cannot make the graph harder to color).
+        auto george = [&](int u, int v) -> bool {
+            for (int t : active_adj(v)) {
+                if (!george_ok(t, u)) {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        // Merge v into u: v is absorbed (coalesced_flag set), u survives.
+        // For each neighbor t of v:
+        //   - Add edge (u, t) if missing → both gain one active neighbor.
+        //   - Decrement t's eff_degree → t loses v as an active neighbor.
+        // Net eff_degree change for t: 0 if (u,t) is new, -1 if (u,t) already existed.
+        auto combine = [&](int u, int v) {
+            coalesced_flag[static_cast<size_t>(v)] = true;
+            alias[static_cast<size_t>(v)] = u;
+            for (int t_raw : adj_work[static_cast<size_t>(v)]) {
+                const int kT = get_alias(t_raw);
+                if (kT == u || kT == v) {
+                    continue;
+                }
+                const bool kIsNewEdge = adj_work[static_cast<size_t>(u)].insert(kT).second;
+                if (kIsNewEdge) {
+                    adj_work[static_cast<size_t>(kT)].insert(u);
+                    // Both sides gain a new active neighbor.
+                    if (!precolored[static_cast<size_t>(u)] && !on_stack[static_cast<size_t>(u)] &&
+                        !coalesced_flag[static_cast<size_t>(u)]) {
+                        ++eff_degree[static_cast<size_t>(u)];
+                    }
+                    if (!precolored[static_cast<size_t>(kT)] &&
+                        !on_stack[static_cast<size_t>(kT)] &&
+                        !coalesced_flag[static_cast<size_t>(kT)]) {
+                        ++eff_degree[static_cast<size_t>(kT)];
+                    }
+                }
+                // v is leaving the active graph; kT loses it as an active neighbor.
+                decrement_degree(kT);
+            }
+        };
+
+        // ── Main coloring loop ─────────────────────────────────────────────────────
+        //
+        // Each outer iteration runs exactly one of four phases (highest-priority first):
+        //   1. Simplify: push one non-move-related, degree<K node → guaranteed colorable.
+        //   2. Coalesce: try George criterion on pending moves; restart after one success.
+        //   3. Freeze:   give up on coalescing for one low-degree move-related node.
+        //   4. Spill:    optimistically push the highest-degree node (Briggs may rescue).
+        //
+        // Termination: each iteration removes ≥1 node from the active set (Simplify/Spill)
+        // or eliminates ≥1 pending move (Coalesce/Freeze).
+        while (true) {
+            // Are there any active candidates left to process?
+            {
+                bool any_left = false;
+                for (int u = 0; u < kN; ++u) {
+                    if (is_cand(u) && !on_stack[static_cast<size_t>(u)] &&
+                        !coalesced_flag[static_cast<size_t>(u)]) {
+                        any_left = true;
                         break;
                     }
                 }
-            }
-
-            if (!any_left()) {
-                break;
-            }
-
-            int victim = -1;
-            int best_deg = -1;
-            for (int u = 0; u < kNumNodes; ++u) {
-                if (!need_simplify[static_cast<size_t>(u)] || on_stack[static_cast<size_t>(u)]) {
-                    continue;
-                }
-                const int kDeg = eff_degree[static_cast<size_t>(u)];
-                if (kDeg > best_deg) {
-                    best_deg = kDeg;
-                    victim = u;
-                }
-            }
-            assert(victim >= 0);
-            select_stack.push(victim);
-            on_stack[static_cast<size_t>(victim)] = true;
-            for (int nb : ig.Neighbors(victim)) {
-                if (need_simplify[static_cast<size_t>(nb)] && !on_stack[static_cast<size_t>(nb)]) {
-                    --eff_degree[static_cast<size_t>(nb)];
-                }
-            }
-        }
-
-        std::unordered_set<int> actual_spills;
-
-        while (!select_stack.empty()) {
-            const int kPopped = select_stack.top();
-            select_stack.pop();
-
-            // Precolored ($t0-$t9 palette nodes) never enter need_simplify; guard for robustness.
-            if (precolored[static_cast<size_t>(kPopped)]) {
-                continue;
-            }
-
-            std::vector<bool> used(static_cast<size_t>(ColoringResult::kNumPaletteColors), false);
-            for (int nb : ig.Neighbors(kPopped)) {
-                const int kNeighborColor = color[static_cast<size_t>(nb)];
-                if (kNeighborColor >= 0 && kNeighborColor < ColoringResult::kNumPaletteColors) {
-                    used[static_cast<size_t>(kNeighborColor)] = true;
-                }
-            }
-
-            int chosen = -1;
-            for (int palette_idx = 0; palette_idx < ColoringResult::kNumPaletteColors;
-                 ++palette_idx) {
-                if (!used[static_cast<size_t>(palette_idx)]) {
-                    chosen = palette_idx;
+                if (!any_left) {
                     break;
                 }
             }
 
+            // ── Phase 1: Simplify ─────────────────────────────────────────────────
+            // Non-move-related candidates with degree < K are guaranteed colorable by the
+            // pigeonhole principle; push one and let the degree cascade restart the loop.
+            {
+                bool simplified = false;
+                const auto kMoveRel = move_related_set();
+                for (int u = 0; u < kN; ++u) {
+                    if (!is_cand(u) || on_stack[static_cast<size_t>(u)] ||
+                        coalesced_flag[static_cast<size_t>(u)] || kMoveRel.count(u)) {
+                        continue;
+                    }
+                    if (eff_degree[static_cast<size_t>(u)] < kK) {
+                        sel_stack.push(u);
+                        on_stack[static_cast<size_t>(u)] = true;
+                        for (int t : active_adj(u)) {
+                            decrement_degree(t);
+                        }
+                        simplified = true;
+                        break; // restart: degree decrements may unlock more nodes
+                    }
+                }
+                if (simplified) {
+                    continue;
+                }
+            }
+
+            // ── Phase 2: Coalesce (George criterion) ──────────────────────────────
+            // First, remove pending moves that are now trivially resolved or permanently
+            // blocked (same alias, stale, both precolored, interfering sides, or involve
+            // non-allocatable physical registers like $v0/$a0 that carry no palette color).
+            {
+                auto it = pending_moves.begin();
+                while (it != pending_moves.end()) {
+                    const int kX = get_alias(it->first);
+                    const int kY = get_alias(it->second);
+                    const bool kXGone = on_stack[static_cast<size_t>(kX)] ||
+                                        coalesced_flag[static_cast<size_t>(kX)];
+                    const bool kYGone = on_stack[static_cast<size_t>(kY)] ||
+                                        coalesced_flag[static_cast<size_t>(kY)];
+                    // Moves involving non-allocatable physical registers ($v0, $a0, $sp …)
+                    // cannot be coalesced: no palette color can be assigned to such a node.
+                    const bool kXInvalid = !is_cand(kX) && !precolored[static_cast<size_t>(kX)];
+                    const bool kYInvalid = !is_cand(kY) && !precolored[static_cast<size_t>(kY)];
+                    if (kX == kY || kXGone || kYGone ||
+                        (precolored[static_cast<size_t>(kX)] &&
+                         precolored[static_cast<size_t>(kY)]) ||
+                        adj_work[static_cast<size_t>(kX)].count(kY) > 0 || kXInvalid || kYInvalid) {
+                        it = pending_moves.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+            }
+            // Try George coalescing on each surviving move.
+            {
+                bool coalesced_one = false;
+                for (auto it = pending_moves.begin(); it != pending_moves.end(); ++it) {
+                    int u = get_alias(it->first);
+                    int v = get_alias(it->second);
+                    // Convention: if v is precolored (fixed color), swap so u is the
+                    // fixed-color survivor.  This preserves precolored nodes' palette slots.
+                    if (precolored[static_cast<size_t>(v)]) {
+                        std::swap(u, v);
+                    }
+                    // Try George with u surviving (checks v's neighbors).
+                    if (george(u, v)) {
+                        pending_moves.erase(it);
+                        combine(u, v);
+                        coalesced_one = true;
+                        break;
+                    }
+                    // For two non-precolored virtual nodes, also try the reversed direction.
+                    if (!precolored[static_cast<size_t>(u)] && george(v, u)) {
+                        pending_moves.erase(it);
+                        combine(v, u); // v survives, u is absorbed
+                        coalesced_one = true;
+                        break;
+                    }
+                }
+                if (coalesced_one) {
+                    continue; // restart: new simplifiable nodes may have appeared
+                }
+            }
+
+            // ── Phase 3: Freeze ───────────────────────────────────────────────────
+            // No pending move can be coalesced right now.  Find a low-degree move-related
+            // candidate, discard its pending moves, and let Simplify handle it next round.
+            {
+                bool frozen = false;
+                const auto kMoveRel = move_related_set();
+                for (int u = 0; u < kN; ++u) {
+                    if (!is_cand(u) || on_stack[static_cast<size_t>(u)] ||
+                        coalesced_flag[static_cast<size_t>(u)]) {
+                        continue;
+                    }
+                    if (kMoveRel.count(u) && eff_degree[static_cast<size_t>(u)] < kK) {
+                        // Remove all pending moves that reference u.
+                        auto mit = pending_moves.begin();
+                        while (mit != pending_moves.end()) {
+                            const int kA = get_alias(mit->first);
+                            const int kB = get_alias(mit->second);
+                            if (kA == u || kB == u) {
+                                mit = pending_moves.erase(mit);
+                            } else {
+                                ++mit;
+                            }
+                        }
+                        frozen = true;
+                        break; // u is now non-move-related and will be simplified next round
+                    }
+                }
+                if (frozen) {
+                    continue;
+                }
+            }
+
+            // ── Phase 4: Spill (optimistic Briggs) ────────────────────────────────
+            // All remaining candidates have degree ≥ K.  Select the highest-degree node as
+            // a potential spill: remove its moves, then push it optimistically.
+            // Briggs' Select phase may still find a valid color (not all neighbors may use
+            // distinct colors), so this does not guarantee an actual spill.
+            {
+                int victim = -1;
+                int best_deg = -1;
+                for (int u = 0; u < kN; ++u) {
+                    if (!is_cand(u) || on_stack[static_cast<size_t>(u)] ||
+                        coalesced_flag[static_cast<size_t>(u)]) {
+                        continue;
+                    }
+                    if (eff_degree[static_cast<size_t>(u)] > best_deg) {
+                        best_deg = eff_degree[static_cast<size_t>(u)];
+                        victim = u;
+                    }
+                }
+                assert(victim >= 0);
+                // Remove victim's pending moves to unblock its neighbors.
+                {
+                    auto mit = pending_moves.begin();
+                    while (mit != pending_moves.end()) {
+                        const int kA = get_alias(mit->first);
+                        const int kB = get_alias(mit->second);
+                        if (kA == victim || kB == victim) {
+                            { mit = pending_moves.erase(mit); }
+                        } else {
+                            ++mit;
+                        }
+                    }
+                }
+                sel_stack.push(victim);
+                on_stack[static_cast<size_t>(victim)] = true;
+                for (int t : active_adj(victim)) {
+                    decrement_degree(t);
+                }
+            }
+        }
+
+        // ── Select: assign colors from the stack (Briggs optimistic coloring) ───────
+        std::unordered_set<int> actual_spills;
+        while (!sel_stack.empty()) {
+            const int kU = sel_stack.top();
+            sel_stack.pop();
+            // Precolored nodes never enter the stack; guard for robustness.
+            if (precolored[static_cast<size_t>(kU)]) {
+                continue;
+            }
+
+            // Collect colors already used by neighbors (using alias to handle coalesced nodes).
+            std::vector<bool> used(static_cast<size_t>(kK), false);
+            for (int nb_raw : adj_work[static_cast<size_t>(kU)]) {
+                const int kNb = get_alias(nb_raw);
+                const int kNbColor = color[static_cast<size_t>(kNb)];
+                if (kNbColor >= 0 && kNbColor < kK) {
+                    used[static_cast<size_t>(kNbColor)] = true;
+                }
+            }
+            // Assign the first available palette color.
+            int chosen = -1;
+            for (int c = 0; c < kK; ++c) {
+                if (!used[static_cast<size_t>(c)]) {
+                    chosen = c;
+                    break;
+                }
+            }
             if (chosen >= 0) {
-                color[static_cast<size_t>(kPopped)] = chosen;
+                color[static_cast<size_t>(kU)] = chosen;
             } else {
-                actual_spills.insert(kPopped);
+                actual_spills.insert(kU); // optimistic coloring failed → actual spill
+            }
+        }
+
+        // Propagate colors to coalesced nodes: they share their representative's color.
+        for (int i = 0; i < kN; ++i) {
+            if (coalesced_flag[static_cast<size_t>(i)]) {
+                color[static_cast<size_t>(i)] = color[static_cast<size_t>(get_alias(i))];
             }
         }
 
@@ -299,12 +559,11 @@ namespace mips {
             case MipsOpcode::SYSCALL:
             case MipsOpcode::J:
             case MipsOpcode::JAL:
-            case MipsOpcode::JR:
-                out.push_back(inst);
-                return out;
+            case MipsOpcode::JR: out.push_back(inst); return out;
             case MipsOpcode::BNEZ:
             case MipsOpcode::BEQZ:
-                // Condition lives in src1 (see AsmWriter::EmitBnez); must rewrite vreg like other uses.
+                // Condition lives in src1 (see AsmWriter::EmitBnez); must rewrite vreg like other
+                // uses.
                 scratch = 0;
                 m.src1 = MapRegName(inst.src1, reg_ids, cr, spill_slots, prefix, scratch, true);
                 out.insert(out.end(), prefix.begin(), prefix.end());
@@ -340,6 +599,15 @@ namespace mips {
                 scratch = 0;
                 m.dst = MapDefReg(inst.dst, reg_ids, cr);
                 m.src1 = MapRegName(inst.src1, reg_ids, cr, spill_slots, prefix, scratch, true);
+                // Coalesce elimination: if dst and src resolve to the same physical register
+                // and no spill loads are needed (prefix empty), this MOVE is a no-op.
+                // $k0/$k1 are scratch registers used only for spill sequences; a MOVE between
+                // two scratch registers might still need the downstream sw, so skip elimination
+                // for those — the prefix/suffix logic in AppendRewritten handles them correctly.
+                if (inst.op == MipsOpcode::MOVE && m.dst == m.src1 && prefix.empty() &&
+                    m.dst != "$k0" && m.dst != "$k1") {
+                    return out; // out is empty: trivial move eliminated
+                }
                 AppendRewritten(out, prefix, m, inst.dst, reg_ids, cr, spill_slots);
                 return out;
             default:
@@ -468,7 +736,7 @@ namespace mips {
         std::cerr << "[RegAlloc] Build complete: " << kNumRegs << " registers, "
                   << result.blocks.size() << " blocks\n";
 
-        ColoringResult cr = SimplifyAndSelect(ig, reg_ids);
+        ColoringResult cr = ColorWithCoalesce(ig, reg_ids);
 
         if (!cr.actual_spills.empty()) {
             std::cerr << "[RegAlloc] warning: " << cr.actual_spills.size()
