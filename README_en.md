@@ -306,6 +306,31 @@ Building on the fully-SSA-form IR produced by Mem2Reg, the backend traverses `ir
 
 ------
 
+## ✨ Code Optimization
+
+### 1. Overview
+
+After IR generation and before MIPS emission, a sequence of IR-level optimization passes runs on the fully-SSA-form IR. The MIPS backend then applies target-level optimizations during instruction emission and register allocation. All passes can be individually enabled or disabled via `const bool` flags at the top of `src/main.cpp`.
+
+**IR-level optimizations** (applied to the fully-SSA-form LLVM IR produced by Mem2Reg):
+
+- **ConstFoldLVN (Constant Folding + Local Value Numbering)**: Within each basic block, expressions whose operands are all compile-time constants are evaluated at compile time (constant folding). A hash table assigns a value number to each computation (LVN), and redundant computations sharing the same value number are replaced by references to the already-computed result, eliminating common subexpressions. The pass runs to a **fixpoint** until no further simplification is possible.
+- **DCE (Dead Code Elimination)**: Scans each basic block for side-effect-free instructions whose results have no uses, then removes them. Follows a two-phase ordering—first call `dropAllOperands()` to detach all operands, then erase the instruction from the basic block—to maintain use-list consistency and prevent use-after-free.
+
+**MIPS-level optimizations** (applied to the structured `MipsInst` buffer):
+
+- **Strength reduction**: Replaces multiplication or division by a power of two with an equivalent shift instruction (`sll`/`srl`/`sra`), avoiding the higher-latency `mult`/`div` operations.
+- **Redundant jump elimination**: Removes unconditional branch instructions whose target label immediately follows (`b label` directly before `label:`), reducing superfluous control flow.
+- **Graph-coloring register allocation (Chaitin-Briggs)**: See the **MIPS Target Code Generation** section above.
+
+### 2. Related Files
+
+- **IR passes**: `include/pass/`, `src/pass/` — `ConstFoldLVN.cpp`, `DCE.cpp` (`Pass.h` defines the common base class `Pass::Run(Function&)`).
+- **MIPS optimizations**: `src/mips/RegAlloc.cpp` (graph-coloring register allocation), `src/mips/InstructionEmitter.cpp` (strength reduction and peephole).
+- **Feature flags**: `const bool` constants at the top of `src/main.cpp` control whether each pass is active.
+
+------
+
 ## 🛠️ Build and Run
 
 ### Requirements

@@ -289,8 +289,8 @@
 
 在 Mem2Reg 产出的完全 SSA 形式 IR 基础上，遍历 `ir::Module`，将每条 IR 指令翻译为等价的 MIPS 汇编序列，写入 `mips.txt`，可在 MARS 4.5 上正确执行。
 
-- **图染色寄存器分配**：实现完整的 Chaitin-Briggs 算法（Build → Simplify → Coalesce → Freeze → Spill → Select），通过活跃变量分析与干涉图构建，将虚拟寄���器分配到 18 个物理寄存器（`$t0`-`$t9` + `$s0`-`$s7`）中。George 准则合并消除冗余 MOVE 指令，callee-saved 寄存器自动保存/恢复。
-- **模块���架构**：经 AI 协作重构，拆分为 10 个单一职责模块——StackFrame（栈帧布局）、InstructionEmitter（指令选择）、AsmWriter（输出格式化）、LivenessAnalysis（活跃分析）、RegAlloc（寄存器分配）等，职责清晰、依赖无环。
+- **图染色寄存器分配**：实现完整的 Chaitin-Briggs 算法（Build → Simplify → Coalesce → Freeze → Spill → Select），通过活跃变量分析与干涉图构建，将虚拟寄存器分配到 18 个物理寄存器（`$t0`-`$t9` + `$s0`-`$s7`）中。George 准则合并消除冗余 MOVE 指令，callee-saved 寄存器自动保存/恢复。
+- **模块化架构**：经 AI 协作重构，拆分为 10 个单一职责模块——StackFrame（栈帧布局）、InstructionEmitter（指令选择）、AsmWriter（输出格式化）、LivenessAnalysis（活跃分析）、RegAlloc（寄存器分配）等，职责清晰、依赖无环。
 - **调用约定**：参数 0–3 通过 `$a0`–`$a3`，参数 4+ 由调用者在栈上传递；返回值 `$v0`；`$ra` 由被调函数保存/恢复。
 - **Phi 下降**：在前驱块跳转前通过拓扑排序发射 move，解决并行复制的写覆盖问题。
 
@@ -303,6 +303,31 @@
 
 - 规范详见 [第五次实验要求](docs/course_info/requirement_5_codegen.md)。
 - 生成的 MIPS 汇编通过了 `SysY_Test_2024/` 下的全部测试样例验证。
+
+------
+
+## ✨ 代码优化 (Code Optimization)
+
+### 1. 功能概述
+
+在 IR 生成之后、MIPS 发射之前，依次运行若干 IR 级优化 Pass；MIPS 后端则在指令发射与寄存器分配阶段执行目标代码级优化。所有优化均可通过 `src/main.cpp` 顶部的 `const bool` 开关独立启用或禁用。
+
+**IR 级优化**（作用于 Mem2Reg 产出的完全 SSA 形式 LLVM IR）：
+
+- **ConstFoldLVN（常量折叠 + 局部值编号）**：在每个基本块内，将操作数全为常量的运算在编译期直接求值（常量折叠），并用哈希表为每条计算分配值编号（LVN），将相同值编号的冗余计算替换为已有结果的引用，消除公共子表达式。整个 Pass 运行到**不动点**，直至无进一步化简。
+- **DCE（死代码消除）**：遍历基本块指令，将无副作用且结果无任何 use 的指令标记并删除。采用「先 `dropAllOperands()` 解除操作数引用、再从基本块抹除」的两阶段顺序，确保 use-list 一致性、避免 use-after-free。
+
+**MIPS 级优化**（作用于结构化 `MipsInst` 缓冲区）：
+
+- **强度削减**：将乘以/除以 2 的幂次方替换为等价的移位指令（`sll`/`srl`/`sra`），规避开销较高的 `mult`/`div`。
+- **冗余跳转消除**：删除跳转目标紧随其后的无条件跳转（`b label` 后立即接 `label:`），减少无用控制流。
+- **图染色寄存器分配（Chaitin-Briggs）**：见「MIPS 目标代码生成」节。
+
+### 2. 相关文件
+
+- **IR Pass**：`include/pass/`、`src/pass/` 下的 `ConstFoldLVN.cpp`、`DCE.cpp`（`Pass.h` 定义公共基类 `Pass::Run(Function&)`）。
+- **MIPS 优化**：`src/mips/RegAlloc.cpp`（图染色寄存器分配）、`src/mips/InstructionEmitter.cpp`（强度削减与窥孔）。
+- **优化开关**：`src/main.cpp` 顶部 `const bool` 常量控制各 Pass 的启用状态。
 
 ------
 
